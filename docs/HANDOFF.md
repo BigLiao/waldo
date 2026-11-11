@@ -58,7 +58,7 @@ WALDO_KEEP_TEST=1 go test -p 1 -run TestProbe -v ./test/e2e/   # 保留测试目
 
 ### 版本与安装
 
-`proto.FullVersion()` = `0.1.0+<Build>`。`make dev` 不设 `Build`，用可执行文件的 sha256 前 12 位，因此每次重编都会触发重装到 B。`make build`/`make release` 用 git 提交号，多个架构的二进制共享同一个 id——B 架构和 A 不同时，A 会在自己旁边找 `waldo-linux-<arch>`。
+`proto.FullVersion()` = `<Version>+<Build>`，默认 Version 为 `0.1.0`，tag 发布时注入去掉 `v` 前缀的版本。`make dev` 不设 `Build`，用可执行文件的 sha256 前 12 位，因此每次重编都会触发重装到 B。`make build`/`make release` 用 git 提交号，多个架构的二进制共享同一个 id——B 架构和 A 不同时，A 会在自己旁边找 `waldo-linux-<arch>`。GitHub Actions 的测试与 tag 发布流程见 [开发指南](DEVELOPMENT.md#ci-与发布)。
 
 ## 4. 验证情况
 

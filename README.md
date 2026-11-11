@@ -25,7 +25,18 @@ waldo 让 Claude Code、Codex 等编程 Agent 运行在你自己的服务器上�
 
 ## 安装
 
-目前需要从源码构建（Go 1.26.8 及以上）：
+从 [GitHub Releases](https://github.com/BigLiao/waldo/releases/latest) 下载适合本机架构的 `waldo-linux-amd64` 或 `waldo-linux-arm64`，以及 `SHA256SUMS`，放在同一目录后安装：
+
+```sh
+sha256sum --ignore-missing --check SHA256SUMS
+mkdir -p ~/.local/bin
+install -m 755 waldo-linux-amd64 ~/.local/bin/waldo  # ARM64 改用 waldo-linux-arm64
+waldo version
+```
+
+如果服务器与本机架构不同，再把同一 Release 中服务器架构的二进制以原文件名放到 `~/.local/bin/`，供 `waldo setup` 自动安装到服务器。
+
+也可以从源码构建（Go 1.26.8 及以上）：
 
 ```sh
 git clone https://github.com/BigLiao/waldo.git

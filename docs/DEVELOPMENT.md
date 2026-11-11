@@ -14,6 +14,27 @@ make release   # dist/waldo-linux-{amd64,arm64}；B 的架构与 A 不同时，A
 
 依赖：A 需要 `ssh`、`bubblewrap`（claude profile 还需要 `rg`、`git`、`bash`）；B 需要 `sshd`、`bubblewrap`、`sshfs`（fuse3）和已安装的 Agent。
 
+## CI 与发布
+
+GitHub Actions 在分支 push 和 pull request 时运行 `make test`（vet、单元测试、攻击回归、端到端测试）。Runner 使用 Ubuntu 24.04，自动安装 bubblewrap、sshd、sshfs 等依赖，并开启测试需要的用户命名空间和 FUSE 访问。
+
+提交并推送工作流后，在要发布的提交上创建并推送版本 tag：
+
+```sh
+git tag -a v0.1.0 -m "Release v0.1.0"
+git push origin v0.1.0
+```
+
+`vMAJOR.MINOR.PATCH` tag 会先运行同一套 CI，成功后构建并创建 GitHub Release，附带自动生成的发布说明和三个文件：
+
+- `waldo-linux-amd64`
+- `waldo-linux-arm64`
+- `SHA256SUMS`（SHA256 校验文件）
+
+`v0.2.0-rc.1` 这样的 tag 会发布为 prerelease，不更新 latest。工作流使用自带的 `GITHUB_TOKEN`，发布 job 已声明 `contents: write`，无需配置额外 secret。发布同一 tag 的已有 Release 时会报错，避免覆盖已经发布的二进制。
+
+发布构建从 tag 注入 `VERSION`（去掉 `v` 前缀），从提交号注入共享 `BUILD`，例如 `waldo version` 输出 `0.2.0-rc.1+<12位提交号>`。本地可用 `make release VERSION=0.2.0-rc.1` 复现；两个架构共享同一个版本，保留跨架构自动安装所需的文件名。
+
 ## 测试
 
 ```sh

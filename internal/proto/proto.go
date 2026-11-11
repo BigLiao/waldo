@@ -17,8 +17,8 @@ import (
 	"sync"
 )
 
-// Version is the human-readable release version.
-const Version = "0.1.0"
+// Version is the human-readable release version, overridden from the release tag.
+var Version = "0.1.0"
 
 // Build may be set with -ldflags "-X waldo/internal/proto.Build=..." for
 // release builds (so that binaries of different architectures share an id).
