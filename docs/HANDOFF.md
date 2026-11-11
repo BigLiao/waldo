@@ -1,12 +1,12 @@
 # waldo 交接文档
 
-> 状态截至 2026-11-11。设计依据是仓库根目录的 [DESIGN.md](../DESIGN.md)，用法见 [README.md](../README.md)，安全模型见 [SECURITY.md](SECURITY.md)，profile 格式见 [profiles.md](profiles.md)。本文只讲接手需要知道的事：现在到哪了、怎么跑、代码怎么读、哪里有坑、下一步做什么。
+> 状态截至 2026-11-11。设计依据是仓库根目录的 [DESIGN.md](../DESIGN.md)，用法见 [README.md](../README.md)，构建、测试与实现细节见 [DEVELOPMENT.md](DEVELOPMENT.md)，安全模型见 [SECURITY.md](SECURITY.md)，profile 格式见 [profiles.md](profiles.md)。本文只讲接手需要知道的事：现在到哪了、怎么跑、代码怎么读、哪里有坑、下一步做什么。
 
 ## 1. 一句话现状
 
 DESIGN.md 的 **M0–M4 已实现**，单机回环（A 和 B 是同一台机器）下全部测试通过，真实 Claude Code 2.1.322 端到端可用。**M5 未开始**。两台真实 Linux 机器间已完成 setup/doctor、不同 UID/GID 的文件投射探针、Claude 版本查询与首次启动界面验证；完整开发任务尚未验证。
 
-新增的会话说明功能：A 在启动时生成只读 `/run/waldo/context/waldo.md`，额外投射到 B；`internal/projection` 为项目根目录指令文件提供带引用的只读启动快照，普通 SFTP 操作仍由 `pkg/sftp.Server` 处理。配置见 README 的 `[context]`。该功能有协议层单元测试，尚未重新做真实 Agent 或两机端到端验证；目录排除策略尚未实现。
+新增的会话说明功能：A 在启动时生成只读 `/run/waldo/context/waldo.md`，额外投射到 B；`internal/projection` 为项目根目录指令文件提供带引用的只读启动快照，普通 SFTP 操作仍由 `pkg/sftp.Server` 处理。配置见 [configuration.md](configuration.md) 的 `[context]`。该功能有协议层单元测试，尚未重新做真实 Agent 或两机端到端验证；目录排除策略尚未实现。
 
 ## 2. 快速上手
 
