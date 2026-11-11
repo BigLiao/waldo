@@ -4,7 +4,7 @@
 
 ## 1. 一句话现状
 
-DESIGN.md 的 **M0–M4 已实现**，单机回环（A 和 B 是同一台机器）下全部测试通过，真实 Claude Code 2.1.322 端到端可用。**M5 未开始**。两台真实 Linux 机器间已完成 setup/doctor、不同 UID/GID 的文件投射探针、Claude 版本查询与首次启动界面验证；完整开发任务尚未验证。
+DESIGN.md 的 **M0–M4 已实现**，单机回环（A 和 B 是同一台机器）下已有测试通过记录，真实 Claude Code 2.1.322 端到端可用。**M5 已开始：新增 90 秒限时重连**，续传、SFTP 打开句柄、Agent PID 保持和超时终止、独立 host 与自动重试循环已通过测试；本次环境无 `/dev/fuse`，新增的完整挂载重连回归尚未实测。两台真实 Linux 机器间已完成 setup/doctor、不同 UID/GID 的文件投射探针、Claude 版本查询与首次启动界面验证；完整开发任务尚未验证。
 
 新增的会话说明功能：A 在启动时生成只读 `/run/waldo/context/waldo.md`，额外投射到 B；`internal/projection` 为项目根目录指令文件提供带引用的只读启动快照，普通 SFTP 操作仍由 `pkg/sftp.Server` 处理。配置见 [configuration.md](configuration.md) 的 `[context]`。该功能有协议层单元测试，尚未重新做真实 Agent 或两机端到端验证；目录排除策略尚未实现。
 
@@ -16,7 +16,7 @@ DESIGN.md 的 **M0–M4 已实现**，单机回环（A 和 B 是同一台机器�
 
 ```sh
 make dev          # 编译 ./waldo（版本号 = 二进制哈希，重编后会自动重装到 B）
-make test         # vet + 单元 + 攻击 + e2e，约 2 分钟
+make test         # vet + 单元 + 攻击 + e2e（含完整 90 秒重连超时回归）
 make test-e2e     # 只跑全链路
 WALDO_KEEP_TEST=1 go test -p 1 -run TestProbe -v ./test/e2e/   # 保留测试目录便于排查
 ```
@@ -50,7 +50,7 @@ WALDO_KEEP_TEST=1 go test -p 1 -run TestProbe -v ./test/e2e/   # 保留测试目
 
 ### 线上协议速记
 
-- A↔B：`ssh -T` 的 stdin/stdout 上跑 yamux。B 先输出一行 `WALDO-HOST <版本>` 再开始 yamux；版本不符或没装时远端脚本输出 `WALDO-NEED-INSTALL <uname -s> <uname -m>`，A 安装后重试。
+- A↔B：SSH 先输出 `WALDO-HOST <版本>`，再进入 `internal/reconnect` 字节续传协议，其上运行同一个 yamux 会话；B 的独立 host 持有 Agent 和挂载，SSH 只转接私有 Unix socket。断线最多等待 90 秒，重试仅 attach 原会话。版本不符或没装时由原自动安装流程处理。
 - 每条 yamux 流先发一个"4 字节长度 + JSON"的 `Header` 说明用途（`ctl`/`io`/`fs`/`exec`/`sandbox`/`connect`/`hostport`/`dial`）。
 - `io`、`exec` 流之后是帧：1 字节类型 + 4 字节长度 + 负载（stdin、stdout、stderr、信号、窗口大小、退出码、错误信息）。
 - `fs` 流之后是裸 SFTP（B 端 `sshfs -o passive` ↔ A 沙箱内 `pkg/sftp`）。
@@ -74,7 +74,7 @@ WALDO_KEEP_TEST=1 go test -p 1 -run TestProbe -v ./test/e2e/   # 保留测试目
 | `TestDesignM2` | DESIGN M2 验收命令原样 |
 | `TestTTY`、`TestInteractiveShell` | pty、按键、窗口大小同步、被转发命令也拿到匹配尺寸的 pty |
 | `TestPipesAndExitCode` | 非交互管道、stderr、退出码 |
-| `TestCleanupAfterBrokenLink` | 强杀 ssh 后 B 端挂载和运行目录被清理 |
+| `TestReconnectAfterBrokenLink`、`TestCleanupAfterReconnectWindow` | 新增：强杀 SSH 后原 PID、在途命令和文件投射恢复；持续不可达 90 秒后清理。完整挂载测试待有 FUSE 的 runner 验证 |
 | `TestHostStderrFiltered` | B 端二进制被换成往 stderr 写 OSC 52 的脚本，终端里看不到转义序列 |
 | `TestDifferentHome` | A、B 的 HOME 路径不同时映射正确 |
 | `TestSetupAdoptAndPorts` | `setup` 默认复用状态、目录绑定/单文件复制、显式关闭和重新开启时保留已有状态、会话中 `waldo ports` |
@@ -119,7 +119,7 @@ WALDO_KEEP_TEST=1 go test -p 1 -run TestProbe -v ./test/e2e/   # 保留测试目
 |---|---|---|
 | 新建的受保护路径只告警不阻止 | 会话开始时不存在的 `.envrc`、`.git/commondir`、非 git 目录里新 `git init` 的 `.git` 无法预先只读。现在只在退出时对比快照并警告 | `sandbox/integrity.go` |
 | 时钟偏差只告警 | 未实现 DESIGN §11 说的 mtime 校正 | `session.go` 握手处 |
-| 断线即会话结束 | 无脱离/重连（M5） | — |
+| 关闭客户端后不能重新 attach | 已有 90 秒网络重连；客户端退出后最多保留远端一个恢复窗口 | `internal/reconnect`、`internal/host/reconnect.go` |
 | FUSE 缓存尚无主动失效 | 项目默认 10s 内核属性/路径缓存；A 修改（含 Agent 转发执行的命令）需等待 TTL 加在途请求，目录列表与运行路径零缓存，冷查询和文件读取仍有跨机开销 | `host/cache.go`、`[fs] metadata_cache_ttl` |
 | 只有遵守 `HTTP(S)_PROXY` 的程序能出网 | 已额外设 `NODE_USE_ENV_PROXY=1`；SSH 方式的 git remote 不可用 | `session/sandbox.go` `ProxyEnv` |
 | stdin 是终端而 stdout 被重定向时 | Agent 拿到的是立即 EOF 的 stdin（不是 tty） | `relayAgentIO` |
@@ -129,7 +129,7 @@ WALDO_KEEP_TEST=1 go test -p 1 -run TestProbe -v ./test/e2e/   # 保留测试目
 | `doctor` 的"沙箱可见"判断是启发式 | 根据路径前缀推断，不是真的起沙箱查 | `cli.go` `doctor` |
 | `waldo link` 需要用户手动把目录放到 PATH 最前 | 只打印提示 | `cli.go` `link` |
 | Agent 包内自带的原生二进制在 B 上执行 | 不在 PATH 目录里的程序不会被 stub 替换（DESIGN §11 已列为限制） | — |
-| `--isolated`、macOS 作为 A、自研 FUSE 客户端 | 未做（M5） | — |
+| 客户端脱离/重新 attach、`--isolated`、macOS 作为 A、自研 FUSE 客户端 | 未做（M5） | — |
 
 ## 7. 建议的下一步
 
@@ -137,7 +137,7 @@ WALDO_KEEP_TEST=1 go test -p 1 -run TestProbe -v ./test/e2e/   # 保留测试目
 2. **codex 实测**：确认 `--sandbox danger-full-access` 是否需要、首次登录流程能否在无浏览器的 B 上完成（DESIGN §11 最后一项）。
 3. **npm/node 项目实测** M0 验收原文：`npm install && npm start`，宿主机浏览器访问。
 4. 把真实 Claude 的冒烟测试做成可选的自动化测试（需要登录态，默认跳过）。
-5. 然后按 DESIGN M5：脱离/重连 → 带失效推送的 FUSE 缓存 → `--isolated` → macOS。
+5. 验证完整挂载重连回归，再按 DESIGN M5：客户端脱离/重新 attach → 带失效推送的 FUSE 缓存 → `--isolated` → macOS。
 
 ## 8. 排查手册
 

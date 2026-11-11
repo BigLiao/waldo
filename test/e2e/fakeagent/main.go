@@ -6,6 +6,7 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -45,6 +46,21 @@ func main() {
 	switch os.Args[1] {
 	case "probe":
 		probe()
+	case "reconnect":
+		f, err := os.Open("README")
+		if err != nil {
+			panic(err)
+		}
+		defer f.Close()
+		result("pid_before", os.Getpid())
+		out, code := run("", "bash", "-c", "echo started >> reconnect-exec-count; echo ready > reconnect-ready; sleep 4; printf completed")
+		result("inflight_exec", fmt.Sprintf("%s/%d", out, code))
+		b, err := io.ReadAll(f)
+		result("open_handle", strings.TrimSpace(string(b))+fmt.Sprint(err != nil))
+		result("pid_after", os.Getpid())
+		if err := os.WriteFile("reconnect-result", []byte("same session\n"), 0o644); err != nil {
+			panic(err)
+		}
 	case "ownership":
 		if err := ownership(); err != nil {
 			fmt.Fprintln(os.Stderr, "ownership probe:", err)

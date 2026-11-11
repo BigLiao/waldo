@@ -307,22 +307,95 @@ func TestInteractiveShell(t *testing.T) {
 	}
 }
 
-func TestCleanupAfterBrokenLink(t *testing.T) {
-	e, _ := setup(t)
-	cmd := e.Cmd("run", "--", "/bin/bash", "-c", "sleep 60")
+func killSessionSSH(t *testing.T, cmd *exec.Cmd) {
+	t.Helper()
+	out, err := exec.Command("pgrep", "-P", strconv.Itoa(cmd.Process.Pid), "-x", "ssh").Output()
+	if err != nil {
+		t.Fatalf("find session ssh: %v", err)
+	}
+	for _, value := range strings.Fields(string(out)) {
+		pid, err := strconv.Atoi(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		process, _ := os.FindProcess(pid)
+		if err := process.Kill(); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestReconnectAfterBrokenLink(t *testing.T) {
+	e, agent := setup(t)
+	cmd := e.Cmd("run", "--", agent, "reconnect")
+	var output safeBuf
+	cmd.Stdout, cmd.Stderr = &output, &output
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(3 * time.Second)
-	// Kill the ssh client: B must tear the capsule and mounts down.
-	exec.Command("pkill", "-f", "-9", "ssh .*waldo-e2e .*host --data-dir").Run()
+	t.Cleanup(func() { cmd.Process.Kill() })
+	waitFor(t, &output, "RESULT pid_before", 30*time.Second)
+	for i := 0; ; i++ {
+		if harness.Exists(filepath.Join(e.Project, "reconnect-ready")) {
+			break
+		}
+		if i > 200 {
+			t.Fatalf("exec never started: %s", output.String())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	killSessionSSH(t, cmd)
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("reconnected agent: %v\n%s", err, output.String())
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatalf("session did not reconnect: %s", output.String())
+	}
+	r := parseResults(output.String())
+	if r["pid_before"] == "" || r["pid_before"] != r["pid_after"] || r["inflight_exec"] != "completed/0" || r["open_handle"] != "hello from Afalse" {
+		t.Fatalf("original session was not preserved: %v\n%s", r, output.String())
+	}
+	count, _ := os.ReadFile(filepath.Join(e.Project, "reconnect-exec-count"))
+	if string(count) != "started\n" {
+		t.Fatalf("command replayed: %q", count)
+	}
+	result, _ := os.ReadFile(filepath.Join(e.Project, "reconnect-result"))
+	if string(result) != "same session\n" {
+		t.Fatalf("file projection failed after reconnect: %q", result)
+	}
+	waitNoMounts(t)
+}
+
+func TestCleanupAfterReconnectWindow(t *testing.T) {
+	e, _ := setup(t)
+	cmd := e.Cmd("run", "--", "/bin/bash", "-c", "echo READY; sleep 300")
+	var output safeBuf
+	cmd.Stdout, cmd.Stderr = &output, &output
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cmd.Process.Kill() })
+	waitFor(t, &output, "READY", 30*time.Second)
+	// Keep every subsequent SSH attempt offline, while leaving the original
+	// private sshd alive so cleanup behavior is tested independently.
+	if err := os.WriteFile(e.SSHConf, []byte("Host *\n  ProxyCommand /bin/false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	killSessionSSH(t, cmd)
 	done := make(chan struct{})
 	go func() { cmd.Wait(); close(done) }()
 	select {
 	case <-done:
-	case <-time.After(20 * time.Second):
+	case <-time.After(110 * time.Second):
 		cmd.Process.Kill()
-		t.Fatal("waldo did not exit after the link broke")
+		t.Fatal("waldo did not exit after the reconnect window expired")
+	}
+	if cmd.ProcessState.ExitCode() != 255 {
+		t.Fatalf("exit %d, want 255\n%s", cmd.ProcessState.ExitCode(), output.String())
 	}
 	waitNoMounts(t)
 	base := filepath.Join(os.TempDir(), fmt.Sprintf("waldo-%d", os.Getuid()))

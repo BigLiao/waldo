@@ -24,6 +24,16 @@ func YamuxConfig() *yamux.Config {
 	return c
 }
 
+// ResumableYamuxConfig delegates liveness detection to the reconnect layer.
+// Internal yamux deadlines must outlast the entire recovery window.
+func ResumableYamuxConfig() *yamux.Config {
+	c := YamuxConfig()
+	c.EnableKeepAlive = false
+	c.ConnectionWriteTimeout = 150 * time.Second
+	c.StreamOpenTimeout = 150 * time.Second
+	return c
+}
+
 // RWC glues a reader and a writer into an io.ReadWriteCloser.
 type RWC struct {
 	R io.Reader

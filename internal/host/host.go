@@ -48,6 +48,10 @@ func Main(args []string) int {
 	dataDir := fs.String("data-dir", "", "data directory on B")
 	doctor := fs.Bool("doctor", false, "print a JSON environment report and exit")
 	adopt := fs.Bool("adopt", false, "share existing agent state (paths on stdin); false disables saved directory bindings")
+	attach := fs.String("reconnect-attach", "", "attach to a resumable session")
+	serve := fs.String("reconnect-serve", "", "own a resumable session independently of SSH")
+	start := fs.Bool("reconnect-start", false, "create the session on initial attach only")
+	window := fs.Duration("reconnect-window", 90*time.Second, "reconnect grace period")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -63,6 +67,15 @@ func Main(args []string) int {
 			return adoptMain(*dataDir)
 		}
 		return unadoptMain(*dataDir)
+	}
+	if *attach != "" || *serve != "" {
+		if *window <= 0 || *window > 120*time.Second {
+			return 2
+		}
+		if *attach != "" {
+			return attachReconnect(*dataDir, *attach, *window, *start)
+		}
+		return serveReconnect(*dataDir, *serve, *window)
 	}
 	h := &host{dataDir: *dataDir}
 	// When the SSH link dies we must still clean up: writes to the closed
@@ -116,7 +129,11 @@ func (h *host) run() (int, error) {
 	if _, err := os.Stdout.WriteString(proto.BannerPrefix + proto.FullVersion() + "\n"); err != nil {
 		return 1, err
 	}
-	sess, err := yamux.Server(util.RWC{R: os.Stdin, W: os.Stdout, C: []io.Closer{os.Stdin, os.Stdout}}, util.YamuxConfig())
+	return h.runOn(util.RWC{R: os.Stdin, W: os.Stdout, C: []io.Closer{os.Stdin, os.Stdout}}, util.YamuxConfig())
+}
+
+func (h *host) runOn(rw io.ReadWriteCloser, cfg *yamux.Config) (int, error) {
+	sess, err := yamux.Server(rw, cfg)
 	if err != nil {
 		return 1, err
 	}

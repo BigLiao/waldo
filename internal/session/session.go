@@ -1,6 +1,7 @@
 package session
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -202,13 +203,13 @@ func reportProtected(snap sandbox.Snapshot, al *audit.Logger) {
 
 func runRemote(o Options, host string, sb *Sandbox, id, cwd, project string, mounts []string, al *audit.Logger) int {
 	tr := SSHTransport(o.Config, host)
-	conn, err := tr.Open(nil)
+	conn, err := tr.OpenResumable()
 	if err != nil {
 		warnf("%v", err)
 		return 255
 	}
 	defer conn.Close()
-	bs, err := yamux.Client(conn.RW, util.YamuxConfig())
+	bs, err := yamux.Client(conn.RW, util.ResumableYamuxConfig())
 	if err != nil {
 		warnf("%v", err)
 		return 255
@@ -258,7 +259,18 @@ func runRemote(o Options, host string, sb *Sandbox, id, cwd, project string, mou
 		warnf("%v", err)
 		return 255
 	}
-	return relayAgentIO(ios, interactive)
+	code := relayAgentIOCancelable(ios, interactive, func() bool {
+		if conn.Reconnecting() {
+			bs.Close()
+			conn.Close()
+			return true
+		}
+		return false
+	})
+	if conn.ReconnectExpired() {
+		warnf("90 秒内未能恢复连接，本次会话已结束")
+	}
+	return code
 }
 
 // acceptFromB serves the streams B opens: only file projection and exec
@@ -270,7 +282,7 @@ func acceptFromB(bs *yamux.Session, sb *Sandbox, al *audit.Logger) {
 			return
 		}
 		go func() {
-			st.SetReadDeadline(time.Now().Add(30 * time.Second))
+			st.SetReadDeadline(time.Now().Add(150 * time.Second))
 			var h proto.Header
 			err := proto.ReadMsg(st, &h)
 			st.SetReadDeadline(time.Time{})
@@ -329,12 +341,21 @@ func spliceTee(b, a io.ReadWriteCloser, w io.Writer) {
 
 // relayAgentIO connects the user's terminal (or pipes) to the agent on B.
 func relayAgentIO(st io.ReadWriteCloser, interactive bool) int {
+	return relayAgentIOCancelable(st, interactive, nil)
+}
+
+func relayAgentIOCancelable(st io.ReadWriteCloser, interactive bool, cancelReconnect func() bool) int {
 	fw := proto.NewFrameWriter(st)
+	restoreTerminal := func() {}
 	if interactive {
 		old, err := term.MakeRaw(0)
-		if err == nil {
-			defer term.Restore(0, old)
-		}
+		restoreTerminal = sync.OnceFunc(func() {
+			resetAgentTerminal(os.Stdout)
+			if err == nil {
+				term.Restore(0, old)
+			}
+		})
+		defer restoreTerminal()
 	}
 	sigs := make(chan os.Signal, 16)
 	if interactive {
@@ -352,6 +373,9 @@ func relayAgentIO(st io.ReadWriteCloser, interactive bool) int {
 				}
 				continue
 			}
+			if cancelReconnect != nil && cancelReconnect() {
+				return
+			}
 			fw.Write(proto.FSignal, []byte{byte(sig)})
 		}
 	}()
@@ -364,6 +388,9 @@ func relayAgentIO(st io.ReadWriteCloser, interactive bool) int {
 			buf := make([]byte, 32<<10)
 			for {
 				n, err := os.Stdin.Read(buf)
+				if n > 0 && bytes.IndexByte(buf[:n], 3) >= 0 && cancelReconnect != nil && cancelReconnect() {
+					return
+				}
 				if n > 0 && fw.Write(proto.FStdin, buf[:n]) != nil {
 					return
 				}
@@ -384,6 +411,7 @@ func relayAgentIO(st io.ReadWriteCloser, interactive bool) int {
 	for {
 		typ, p, err := proto.ReadFrame(st)
 		if err != nil {
+			restoreTerminal()
 			if interactive {
 				os.Stdout.WriteString("\r\n")
 			}

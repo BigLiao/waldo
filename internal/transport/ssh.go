@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 
 	"golang.org/x/term"
 
@@ -30,18 +31,29 @@ type Transport interface {
 
 // Conn is a running link to B.
 type Conn struct {
-	RW  io.ReadWriteCloser
-	cmd *exec.Cmd
+	RW           io.ReadWriteCloser
+	cmd          *exec.Cmd
+	closeOnce    sync.Once
+	closeFunc    func()
+	reconnecting func() bool
 }
 
 // Close terminates the link.
 func (c *Conn) Close() {
-	c.RW.Close()
-	if c.cmd != nil && c.cmd.Process != nil {
-		c.cmd.Process.Kill()
-		c.cmd.Wait()
-	}
+	c.closeOnce.Do(func() {
+		if c.closeFunc != nil {
+			c.closeFunc()
+			return
+		}
+		c.RW.Close()
+		if c.cmd != nil && c.cmd.Process != nil {
+			c.cmd.Process.Kill()
+			c.cmd.Wait()
+		}
+	})
 }
+
+func (c *Conn) Reconnecting() bool { return c.reconnecting != nil && c.reconnecting() }
 
 // SSH is the ssh(1) based transport.
 type SSH struct {

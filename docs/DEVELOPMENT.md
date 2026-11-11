@@ -86,4 +86,5 @@ docs/                 SECURITY.md、profiles.md
 - **Claude Code 实测**（2.1.322）：shell 快照确实写在 `~/.claude/shell-snapshots`，cwd 记录文件在 `/tmp`，profile 的 `shared` 列表无需调整；`USE_BUILTIN_RIPGREP=0` 后它调用 PATH 上的 `rg`（被转发到 A）。
 - **默认复用 B 的 Agent 状态**：B 上已有的状态**目录**（如 `~/.claude`，OAuth 凭证在其中的 `.credentials.json`）直接绑定进胶囊，B 上原生 claude 与 waldo 共用同一份凭证；状态**文件**（如 `~/.claude.json`，不含令牌）首次复制一份到胶囊 HOME，已有非空副本不覆盖。原因是实测：对单文件绑定挂载做"写临时文件再 rename"会返回 EBUSY（DESIGN §5.2 预见的问题），Claude Code 正是这样改写 `~/.claude.json` 的。两边的 `~/.claude.json`（项目信任、界面偏好等）此后各自独立。`setup --adopt-login=false` 只停止目录共享，保留原文件、已有副本和独立状态。
 - **来自 B 的所有终端输出都过滤**：不仅是 Agent 的 io 流，ssh 转发的 B 端 stderr、握手错误信息、doctor 报告字段也都经过 `termfilter`（有回归测试：B 端二进制被换成往 stderr 写 OSC 52 的脚本）。
-- 未实现（属于 M5 或之后）：`--isolated`（worktree）、macOS 作为 A、断线重连、自研 FUSE 客户端与缓存。
+- **限时重连**：A/B 之间的 yamux 下方增加 `internal/reconnect` 字节续传层，以消费偏移确认、接收偏移续接，避免重放已接收的数据；B 由独立的每会话进程持有 Agent 和挂载，SSH 子进程只做转接。检测到断线后保留 90 秒，超时清理；每方向 4 MiB 缓冲，满时背压。重试只接回原会话，不创建新 Agent。相关回归覆盖半包、丢失确认、连续重连、SFTP 打开句柄、Agent PID 保持、实际 SSH 重试循环和超时终止。完整挂载回归见 `TestReconnectAfterBrokenLink`、`TestCleanupAfterReconnectWindow`（后者需等待完整 90 秒）。
+- 未实现（属于 M5 或之后）：客户端退出后的脱离/重新 attach、`--isolated`（worktree）、macOS 作为 A、自研 FUSE 客户端与缓存。
