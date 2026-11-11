@@ -137,7 +137,7 @@ func doctorMain(dataDir string) int {
 		}
 		c := Check{Name: "agent " + p.Name + " 已有状态（登录）", OK: logged, Warn: !logged}
 		if !logged {
-			c.Detail = "首次运行时会提示登录；或用 waldo setup --adopt-login 复用 B 上已有的登录"
+			c.Detail = "运行 waldo setup 默认复用 B 上已有的配置和登录；没有已有登录时可在首次启动 Agent 时登录"
 		}
 		add(c)
 	}

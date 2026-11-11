@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -54,6 +55,11 @@ func setup(t *testing.T) (*harness.Env, string) {
 
 func TestProbe(t *testing.T) {
 	e, agent := setup(t)
+	readmePath := filepath.Join(e.Project, "README")
+	readmeBefore, err := os.Stat(readmePath)
+	if err != nil {
+		t.Fatal(err)
+	}
 	e.WriteConfig("[sandbox]\npass_env = [\"E2E_*\"]\n")
 	port := harness.FreePort(t)
 	cmd := e.Cmd("run", "--", agent, "probe")
@@ -83,7 +89,7 @@ func TestProbe(t *testing.T) {
 			os.WriteFile(filepath.Join(e.Project, ".e2e-done"), nil, 0o644)
 		}
 	}
-	err := cmd.Wait()
+	err = cmd.Wait()
 	code := cmd.ProcessState.ExitCode()
 	t.Logf("output:\n%s\nstderr:\n%s", all.String(), stderr.String())
 	if code != 42 {
@@ -108,12 +114,16 @@ func TestProbe(t *testing.T) {
 	check("abs_sh", "abs-ok/0")
 	check("bash_is_stub", "true")
 	check("readme", "hello from Afalse")
+	check("readme_owner", "true")
 	check("rename_err", "true")
+	check("agent_file_owner", "true")
 	check("cat_agent_txt", "written-by-agent")
 	check("env_has_proxy", "true")
 	check("env_has_waldo", "false")
 	check("tr", "HELLO WORLD")
 	check("tmp_shared", "tmp-ok")
+	check("tmp_private_owner", "true")
+	check("tmp_private_mode", "true")
 	check("sigterm", "started,got-term/7")
 	check("killed_group", "dead")
 	check("bg_start", "0/true")
@@ -126,6 +136,25 @@ func TestProbe(t *testing.T) {
 	if b, _ := os.ReadFile(filepath.Join(e.Project, "agent.txt")); string(b) != "written-by-agent\n" {
 		t.Errorf("agent.txt on A: %q", b)
 	}
+	// Ownership translation is a view on B. It must not chown A's real files.
+	readmeAfter, err := os.Stat(readmePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeID := readmeBefore.Sys().(*syscall.Stat_t)
+	afterID := readmeAfter.Sys().(*syscall.Stat_t)
+	if beforeID.Uid != afterID.Uid || beforeID.Gid != afterID.Gid || readmeBefore.Mode() != readmeAfter.Mode() {
+		t.Errorf("README ownership or permissions changed on A: before=%d:%d/%v after=%d:%d/%v",
+			beforeID.Uid, beforeID.Gid, readmeBefore.Mode(), afterID.Uid, afterID.Gid, readmeAfter.Mode())
+	}
+	written, err := os.Stat(filepath.Join(e.Project, "agent.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writtenID := written.Sys().(*syscall.Stat_t)
+	if int(writtenID.Uid) != os.Getuid() || int(writtenID.Gid) != os.Getgid() {
+		t.Errorf("agent.txt owner on A = %d:%d, want %d:%d", writtenID.Uid, writtenID.Gid, os.Getuid(), os.Getgid())
+	}
 	if !harness.IsDir(filepath.Join(e.Project, "sub", "dir")) {
 		t.Error("mkdir did not reach A")
 	}
@@ -137,6 +166,49 @@ func TestProbe(t *testing.T) {
 		}
 	}
 	waitNoMounts(t)
+}
+
+func TestOwnershipProbe(t *testing.T) {
+	e, agent := setup(t)
+	out, err := e.Cmd("run", "--", agent, "ownership").CombinedOutput()
+	if err != nil {
+		t.Fatalf("ownership probe: %v\n%s", err, out)
+	}
+	r := parseResults(string(out))
+	for _, name := range []string{"project_owner", "project_private_owner", "project_private_mode", "project_file_owner", "project_file_mode", "project_write_rename", "tmp_private_owner", "tmp_private_mode", "tmp_file_owner", "tmp_file_mode", "tmp_write_rename", "ownership_ok"} {
+		if r[name] != "true" {
+			t.Errorf("%s = %q\n%s", name, r[name], out)
+		}
+	}
+	left, err := filepath.Glob(filepath.Join(e.Project, ".waldo-ownership-*"))
+	if err != nil || len(left) != 0 {
+		t.Errorf("ownership probe left project files: %v (error %v)", left, err)
+	}
+	waitNoMounts(t)
+}
+
+func TestMetadataCacheFreshness(t *testing.T) {
+	for _, ttl := range []string{"0", "1"} {
+		t.Run(ttl+"s", func(t *testing.T) {
+			e, agent := setup(t)
+			e.WriteConfig("[fs]\nmetadata_cache_ttl = \"" + ttl + "s\"\n")
+			out, err := e.Cmd("run", "--", agent, "metadata", ttl).CombinedOutput()
+			if err != nil {
+				t.Fatalf("metadata probe: %v\n%s", err, out)
+			}
+			r := parseResults(string(out))
+			for _, name := range []string{"metadata_repeated_read_consistent", "metadata_external_write", "metadata_external_create", "metadata_external_rename", "metadata_external_delete", "metadata_ok"} {
+				if r[name] != "true" {
+					t.Errorf("%s = %q\n%s", name, r[name], out)
+				}
+			}
+			left, err := filepath.Glob(filepath.Join(e.Project, ".waldo-metadata-*"))
+			if err != nil || len(left) != 0 {
+				t.Errorf("metadata probe left project files: %v (error %v)", left, err)
+			}
+			waitNoMounts(t)
+		})
+	}
 }
 
 func waitNoMounts(t *testing.T) {
@@ -354,8 +426,8 @@ func TestDifferentHome(t *testing.T) {
 	}
 }
 
-// setup writes a fresh host line, --adopt-login binds state dirs and copies
-// state files (so atomic rewrites work), and `waldo ports` sees a live session.
+// setup writes a fresh host line, adopts existing state by default, preserves
+// state through opt-out/opt-in, and `waldo ports` sees a live session.
 func TestSetupAdoptAndPorts(t *testing.T) {
 	e, agent := setup(t)
 	home, _ := os.UserHomeDir()
@@ -369,7 +441,7 @@ func TestSetupAdoptAndPorts(t *testing.T) {
 	cfg := fmt.Sprintf("ssh_args = [\"-F\", %q]\nremote_dir = %q\n\n[agent.claude]\nstate = []\n[agent.codex]\nstate = []\n[agent.fake]\nbin = %q\nstate = [\"~/%s\", \"~/%s\"]\n",
 		e.SSHConf, e.BData, agent, sdir, sfile)
 	os.WriteFile(filepath.Join(e.AConfig, "config.toml"), []byte(cfg), 0o600)
-	out, err := e.Cmd("setup", "waldo-e2e", "--adopt-login").CombinedOutput()
+	out, err := e.Cmd("setup", "waldo-e2e").CombinedOutput()
 	t.Logf("setup:\n%s", out)
 	if err != nil {
 		t.Fatalf("setup: %v", err)
@@ -390,6 +462,67 @@ func TestSetupAdoptAndPorts(t *testing.T) {
 	if b, _ := os.ReadFile(filepath.Join(home, sfile)); string(b) != "original" {
 		t.Errorf("adopted file should be a copy, native one changed to %q", b)
 	}
+
+	// Opting out stops directory sharing, while retaining the independent
+	// directory and the previously copied file in the capsule's persistent HOME.
+	capsuleDir := filepath.Join(e.BData, "home", sdir)
+	if err := os.MkdirAll(capsuleDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	write := func(path, contents string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	checkContents := func(path, want string) {
+		t.Helper()
+		b, err := os.ReadFile(path)
+		if err != nil || string(b) != want {
+			t.Fatalf("state %s = %q (%v), want %q", path, b, err, want)
+		}
+	}
+	runSetup := func(flag string) {
+		t.Helper()
+		out, err := e.Cmd("setup", "waldo-e2e", flag).CombinedOutput()
+		if err != nil {
+			t.Fatalf("setup %s: %v\n%s", flag, err, out)
+		}
+	}
+	runStateProbe := func() {
+		t.Helper()
+		out, err := e.Cmd("fake", "adopt", sdir, sfile).CombinedOutput()
+		r := parseResults(string(out))
+		if err != nil || r["rename_state_file"] != "true" || r["write_state_dir"] != "true" {
+			t.Fatalf("state probe: %v %v\n%s", err, r, out)
+		}
+	}
+	nativeMarker := filepath.Join(home, sdir, "fromcapsule.txt")
+	capsuleMarker := filepath.Join(capsuleDir, "fromcapsule.txt")
+	independent := filepath.Join(capsuleDir, "independent.txt")
+	copied := filepath.Join(e.BData, "home", sfile)
+	write(nativeMarker, "native-before-optout")
+	write(capsuleMarker, "capsule-before-optout")
+	write(independent, "keep-independent-state")
+	checkContents(copied, "rewritten-in-capsule")
+	runSetup("--adopt-login=false")
+	checkContents(copied, "rewritten-in-capsule")
+	checkContents(independent, "keep-independent-state")
+	checkContents(capsuleMarker, "capsule-before-optout")
+	runStateProbe()
+	checkContents(nativeMarker, "native-before-optout")
+	checkContents(capsuleMarker, "x")
+
+	// Explicit true remains compatible, resumes directory sharing and never
+	// overwrites a nonempty single-file copy with B's native state file.
+	runSetup("--adopt-login=true")
+	checkContents(copied, "rewritten-in-capsule")
+	checkContents(independent, "keep-independent-state")
+	write(capsuleMarker, "capsule-before-reenable")
+	runStateProbe()
+	checkContents(nativeMarker, "x")
+	checkContents(capsuleMarker, "capsule-before-reenable")
+	checkContents(filepath.Join(home, sfile), "original")
 
 	port := harness.FreePort(t)
 	cmd := e.Cmd("run", "--", "/bin/bash", "-c", fmt.Sprintf("python3 -m http.server %d --bind 127.0.0.1 >/dev/null 2>&1 & sleep 4", port))

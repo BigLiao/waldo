@@ -59,6 +59,10 @@ const BannerPrefix = "WALDO-HOST "
 // is missing or has the wrong version.
 const NeedInstall = "WALDO-NEED-INSTALL"
 
+// ContextDir is projected to B and visible to commands executed on A as well.
+const ContextDir = "/run/waldo/context"
+const ContextFile = ContextDir + "/waldo.md"
+
 // Stream kinds.
 const (
 	KindCtl      = "ctl"      // A client -> B host: Hello / HelloAck
@@ -111,17 +115,20 @@ type Facts struct {
 	OS       string    `json:"os"`
 	Arch     string    `json:"arch"`
 	UID      int       `json:"uid"`
+	GID      int       `json:"gid"`
 	Env      []string  `json:"env"`
 	PathDirs []PathDir `json:"path_dirs"`
 }
 
 // SandboxConfig is what the A client tells sandbox-serve at startup.
 type SandboxConfig struct {
-	BaseEnv   []string `json:"base_env"`
-	ExecEnv   []string `json:"exec_env"` // forced onto every forwarded exec (proxy vars)
-	ProxyPort int      `json:"proxy_port"`
-	HostPorts []int    `json:"host_ports"`
-	Mkdirs    []string `json:"mkdirs"`
+	BaseEnv          []string `json:"base_env"`
+	ExecEnv          []string `json:"exec_env"` // forced onto every forwarded exec (proxy vars)
+	ProxyPort        int      `json:"proxy_port"`
+	HostPorts        []int    `json:"host_ports"`
+	Mkdirs           []string `json:"mkdirs"`
+	ContextProject   string   `json:"context_project,omitempty"`
+	InstructionFiles []string `json:"instruction_files,omitempty"`
 }
 
 // PortEvent carries the full current set of listening ports in the sandbox.
@@ -142,18 +149,19 @@ type Profile struct {
 
 // Hello is the session description A sends to B.
 type Hello struct {
-	Version     string   `json:"version"`
-	Session     string   `json:"session"`
-	Profile     Profile  `json:"profile"`
-	Argv        []string `json:"argv"`
-	Cwd         string   `json:"cwd"`
-	Project     string   `json:"project"`
-	Mounts      []string `json:"mounts"` // absolute paths to project from A (project first)
-	Facts       Facts    `json:"facts"`
-	Interactive bool     `json:"interactive"`
-	Rows        uint16   `json:"rows"`
-	Cols        uint16   `json:"cols"`
-	TimeUnixMs  int64    `json:"time_unix_ms"`
+	Version                 string   `json:"version"`
+	Session                 string   `json:"session"`
+	Profile                 Profile  `json:"profile"`
+	Argv                    []string `json:"argv"`
+	Cwd                     string   `json:"cwd"`
+	Project                 string   `json:"project"`
+	Mounts                  []string `json:"mounts"` // absolute paths to project from A (project first)
+	Facts                   Facts    `json:"facts"`
+	Interactive             bool     `json:"interactive"`
+	Rows                    uint16   `json:"rows"`
+	Cols                    uint16   `json:"cols"`
+	TimeUnixMs              int64    `json:"time_unix_ms"`
+	MetadataCacheTTLSeconds int64    `json:"metadata_cache_ttl_seconds"`
 }
 
 type HelloAck struct {

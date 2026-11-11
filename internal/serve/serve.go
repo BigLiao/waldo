@@ -19,8 +19,8 @@ import (
 	"sync"
 
 	"github.com/hashicorp/yamux"
-	"github.com/pkg/sftp"
 
+	"waldo/internal/projection"
 	"waldo/internal/proto"
 	"waldo/internal/util"
 )
@@ -30,6 +30,7 @@ type server struct {
 	cfg  proto.SandboxConfig
 	own  map[int]bool // ports this process listens on itself
 	mu   sync.Mutex
+	view *projection.View
 }
 
 // Main runs sandbox-serve on stdin/stdout.
@@ -56,6 +57,13 @@ func Main() int {
 	if err := proto.ReadMsg(ctl, &s.cfg); err != nil {
 		log.Print(err)
 		return 1
+	}
+	if s.cfg.ContextProject != "" {
+		s.view, err = projection.New(s.cfg.ContextProject, s.cfg.InstructionFiles)
+		if err != nil {
+			log.Printf("session instructions: %v", err)
+			return 1
+		}
 	}
 	for _, d := range s.cfg.Mkdirs {
 		os.MkdirAll(d, 0o700)
@@ -86,13 +94,7 @@ func (s *server) handle(st *yamux.Stream) {
 	}
 	switch h.Kind {
 	case proto.KindFS:
-		srv, err := sftp.NewServer(st)
-		if err != nil {
-			st.Close()
-			return
-		}
-		srv.Serve()
-		srv.Close()
+		s.view.Serve(st)
 	case proto.KindExec:
 		if h.Exec == nil {
 			st.Close()
@@ -170,7 +172,7 @@ func (s *server) facts() proto.Facts {
 		env = util.EnvSet(env, "SHELL", "/bin/sh")
 	}
 	hn, _ := os.Hostname()
-	return proto.Facts{Home: home, Hostname: hn, OS: runtime.GOOS, Arch: runtime.GOARCH, UID: os.Getuid(), Env: env, PathDirs: dirs}
+	return proto.Facts{Home: home, Hostname: hn, OS: runtime.GOOS, Arch: runtime.GOARCH, UID: os.Getuid(), GID: os.Getgid(), Env: env, PathDirs: dirs}
 }
 
 func (s *server) markOwn(port int) {

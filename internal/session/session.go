@@ -119,6 +119,15 @@ func Run(o Options) int {
 		warnf("%v", err)
 		return 2
 	}
+	// Runtime roots stay uncached even when selected as the entire project.
+	if project == "/tmp" || project == proto.ContextDir {
+		pol.MetadataCacheTTL = 0
+	}
+	for _, shared := range o.Profile.Shared {
+		if filepath.Clean(util.ExpandHome(shared, home)) == project {
+			pol.MetadataCacheTTL = 0
+		}
+	}
 	dataDir := config.DataDir()
 	id := newID()
 	al, err := audit.Open(dataDir, id)
@@ -142,8 +151,13 @@ func Run(o Options) int {
 		mounts = append(mounts, p)
 		mkdirs = append(mkdirs, p)
 	}
+	var guide []byte
+	if pol.ContextEnabled {
+		mounts = append(mounts, proto.ContextDir)
+		guide = contextGuide(pol, host, o.Profile.Name, cwd, mounts)
+	}
 
-	al.Log("session", map[string]any{"agent": o.Profile.Name, "project": project, "host": host, "args": o.Args})
+	al.Log("session", map[string]any{"agent": o.Profile.Name, "project": project, "host": host, "args": o.Args, "metadata_cache_ttl": pol.MetadataCacheTTL.String()})
 	snap := sandbox.TakeSnapshot(project)
 
 	state := runState{PID: os.Getpid(), Session: id, Agent: o.Profile.Name, Project: project, Host: host}
@@ -160,7 +174,7 @@ func Run(o Options) int {
 	writeState(nil)
 	defer os.Remove(statePath)
 
-	sb, err := StartSandbox(SandboxOptions{Home: home, Project: project, Policy: pol, Audit: al, DataDir: dataDir, Mkdirs: mkdirs, OnPorts: writeState})
+	sb, err := StartSandbox(SandboxOptions{Home: home, Project: project, Policy: pol, Audit: al, DataDir: dataDir, Mkdirs: mkdirs, OnPorts: writeState, ContextGuide: guide})
 	if err != nil {
 		warnf("%v", err)
 		return 1
@@ -206,7 +220,8 @@ func runRemote(o Options, host string, sb *Sandbox, id, cwd, project string, mou
 	hello := proto.Hello{
 		Version: proto.FullVersion(), Session: id, Profile: o.Profile.Wire(), Argv: o.Args,
 		Cwd: cwd, Project: project, Mounts: mounts, Facts: sb.Facts, Interactive: interactive,
-		TimeUnixMs: time.Now().UnixMilli(),
+		TimeUnixMs:              time.Now().UnixMilli(),
+		MetadataCacheTTLSeconds: int64(sb.MetadataCacheTTL / time.Second),
 	}
 	if interactive {
 		if c, r, err := term.GetSize(1); err == nil {

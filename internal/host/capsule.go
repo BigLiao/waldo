@@ -275,6 +275,11 @@ func (h *host) agentEnv() []string {
 	}
 	env = util.EnvSet(env, "PWD", cwd)
 	env = util.EnvSet(env, "WALDO_SESSION", hl.Session)
+	for _, m := range hl.Mounts {
+		if m == proto.ContextDir {
+			env = util.EnvSet(env, "WALDO_CONTEXT", proto.ContextFile)
+		}
+	}
 	return env
 }
 
@@ -484,13 +489,50 @@ func adoptMain(dataDir string) int {
 		}
 	}
 	sort.Strings(list)
-	os.MkdirAll(dataDir, 0o700)
-	b, _ := json.MarshalIndent(list, "", "  ")
-	if err := os.WriteFile(adoptedPath(dataDir), b, 0o600); err != nil {
+	if err := writeAdopted(dataDir, list); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
 	return 0
+}
+
+// Disabling adoption affects future capsules. Only the binding registry is
+// cleared; native state, private capsule state and copied files are retained.
+func unadoptMain(dataDir string) int {
+	if err := writeAdopted(dataDir, nil); err != nil {
+		fmt.Fprintf(os.Stderr, "关闭 Agent 状态目录绑定: %v\n", err)
+		return 1
+	}
+	fmt.Println("已关闭后续会话的状态目录绑定（B 原始状态和 waldo 已有副本均保留）")
+	return 0
+}
+
+func writeAdopted(dataDir string, list []string) error {
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+		return err
+	}
+	if list == nil {
+		list = []string{}
+	}
+	b, err := json.MarshalIndent(list, "", "  ")
+	if err != nil {
+		return err
+	}
+	// Replace the registry atomically so capsules see a complete list. A
+	// pre-existing registry symlink must never cause a credentials overwrite.
+	f, err := os.CreateTemp(dataDir, ".adopted-")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name())
+	if _, err := f.Write(append(b, '\n')); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(f.Name(), adoptedPath(dataDir))
 }
 
 func copyFile(src, dst string, perm os.FileMode) error {

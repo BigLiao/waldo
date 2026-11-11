@@ -16,6 +16,8 @@ import (
 	"runtime"
 	"strings"
 
+	"golang.org/x/term"
+
 	"waldo/internal/proto"
 	"waldo/internal/termfilter"
 	"waldo/internal/util"
@@ -68,10 +70,41 @@ var HardeningArgs = []string{
 
 // Args returns the ssh argument list for running remoteCmd on the host.
 func (s *SSH) Args(remoteCmd string) []string {
+	return s.args(remoteCmd, false)
+}
+
+func (s *SSH) args(remoteCmd string, tty bool) []string {
 	a := append([]string{}, s.ExtraArgs...)
-	a = append(a, HardeningArgs...)
+	for i := 0; i < len(HardeningArgs); i++ {
+		arg := HardeningArgs[i]
+		if tty && arg == "-T" {
+			a = append(a, "-tt")
+			continue
+		}
+		if tty && arg == "-o" && i+1 < len(HardeningArgs) && HardeningArgs[i+1] == "RequestTTY=no" {
+			i++
+			continue
+		}
+		a = append(a, arg)
+	}
 	a = append(a, "--", s.Host, remoteCmd)
 	return a
+}
+
+// RunInteractive runs initialization outside the protocol connection. The
+// command travels as an SSH argument, leaving stdin available for sudo. Only
+// an actual local terminal requests a remote tty; unattended setup stays in
+// pipe mode so the installer can fail promptly when sudo needs a password.
+func (s *SSH) RunInteractive(remoteCmd string, stdin *os.File, stdout, stderr io.Writer) error {
+	tty := stdin != nil && term.IsTerminal(int(stdin.Fd()))
+	cmd := exec.Command("ssh", s.args(remoteCmd, tty)...)
+	cmd.Stdin = stdin
+	cmd.Stdout = termfilter.New(stdout)
+	cmd.Stderr = termfilter.New(stderr)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("远端初始化 %s 失败: %w", termfilter.Sanitize(s.Host), err)
+	}
+	return nil
 }
 
 // remoteDirExpr renders RemoteDir as a shell expression on B.

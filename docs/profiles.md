@@ -10,7 +10,7 @@
 | `shared` | Agent 进程写、而命令执行侧（A）要读的路径，会投射到 A 沙箱（`/tmp` 和项目目录总是投射） |
 | `scrub` | 凭证类变量：保留在 B 上的 Agent 环境里，但绝不随命令带到 A |
 | `needs` | `waldo doctor` 在 A 上检查的命令 |
-| `state` | Agent 在 B 上的状态路径（`~/` 开头）：doctor 据此判断是否已登录；`waldo setup --adopt-login` 把其中已存在的**目录**绑定进胶囊（与 B 上原生 Agent 共用），**文件**复制一份到胶囊 HOME（单文件绑定会让 rename 覆盖失败） |
+| `state` | Agent 在 B 上的状态路径（`~/` 开头）：doctor 据此判断是否已登录；`waldo setup` 默认把其中已存在的**目录**绑定进胶囊（与 B 上原生 Agent 共用），**文件**首次复制到胶囊 HOME，已有非空副本保留（单文件绑定会让 rename 覆盖失败） |
 
 内置：
 
@@ -32,6 +32,8 @@ state  = ["~/.codex"]
 ```
 
 `waldo run -- <命令>` 使用空 profile（只有 `bin`）。
+
+`setup` 默认复用上面 `state` 声明的现有配置与登录，无需加参数。显式 `--adopt-login`、`--adopt-login=true` 仍可使用。需要停止共享已有状态目录时运行 `waldo setup --adopt-login=false`：这只清除目录绑定名单，不删除 B 上的原文件、此前复制的单文件或胶囊独立状态。再次开启复用时，已有非空单文件副本仍不会被覆盖。
 
 ## Agent 二进制如何进入胶囊
 

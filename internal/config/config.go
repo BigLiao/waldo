@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 
@@ -47,6 +48,15 @@ type SandboxCfg struct {
 	PassEnv  []string `toml:"pass_env"` // extra env vars (glob patterns) passed to sandbox and agent
 }
 
+type ContextCfg struct {
+	Enabled          *bool    `toml:"enabled"`
+	InstructionFiles []string `toml:"instruction_files"`
+}
+
+type FSCfg struct {
+	MetadataCacheTTL *string `toml:"metadata_cache_ttl"`
+}
+
 type NetCfg struct {
 	Allow        []string `toml:"allow"`
 	Ports        any      `toml:"ports"` // "auto" | "off" | [3000, 5173]
@@ -57,6 +67,8 @@ type NetCfg struct {
 type ProjectCfg struct {
 	Net     NetCfg     `toml:"net"`
 	Sandbox SandboxCfg `toml:"sandbox"`
+	Context ContextCfg `toml:"context"`
+	FS      FSCfg      `toml:"fs"`
 }
 
 type Config struct {
@@ -64,6 +76,8 @@ type Config struct {
 	SSHArgs   []string                   `toml:"ssh_args"`
 	RemoteDir string                     `toml:"remote_dir"`
 	Sandbox   SandboxCfg                 `toml:"sandbox"`
+	Context   ContextCfg                 `toml:"context"`
+	FS        FSCfg                      `toml:"fs"`
 	Net       NetCfg                     `toml:"net"`
 	Project   map[string]ProjectCfg      `toml:"project"`
 	Agent     map[string]profile.Profile `toml:"agent"`
@@ -107,13 +121,16 @@ type PortsMode struct {
 
 // Policy is the effective policy for one project.
 type Policy struct {
-	Project      string
-	Allow        []string // static allow list (defaults + config)
-	Ports        PortsMode
-	HostPorts    []int
-	AllowPrivate bool
-	ExposeRO     []string
-	PassEnv      []string
+	Project          string
+	Allow            []string // static allow list (defaults + config)
+	Ports            PortsMode
+	HostPorts        []int
+	AllowPrivate     bool
+	ExposeRO         []string
+	PassEnv          []string
+	ContextEnabled   bool
+	InstructionFiles []string
+	MetadataCacheTTL time.Duration
 }
 
 // DefaultAllow lists common package registries and GitHub.
@@ -152,10 +169,38 @@ func parsePorts(v any) (PortsMode, error) {
 	return PortsMode{}, fmt.Errorf("net.ports: unsupported value %v", v)
 }
 
+func parseMetadataCacheTTL(raw string) (time.Duration, error) {
+	ttl, err := time.ParseDuration(raw)
+	if err != nil {
+		return 0, fmt.Errorf("fs.metadata_cache_ttl: %w", err)
+	}
+	if ttl < 0 || ttl > time.Minute || ttl%time.Second != 0 {
+		return 0, fmt.Errorf("fs.metadata_cache_ttl: expected a whole-second duration between 0s and 1m, got %q", raw)
+	}
+	return ttl, nil
+}
+
 // PolicyFor computes the policy for a project directory.
 func (c *Config) PolicyFor(project string) (*Policy, error) {
 	home, _ := os.UserHomeDir()
-	p := &Policy{Project: project, Ports: PortsMode{Mode: "auto"}}
+	p := &Policy{Project: project, Ports: PortsMode{Mode: "auto"}, ContextEnabled: true,
+		InstructionFiles: []string{"AGENTS.md", "CLAUDE.md"}, MetadataCacheTTL: 10 * time.Second}
+	applyContext := func(c ContextCfg) {
+		if c.Enabled != nil {
+			p.ContextEnabled = *c.Enabled
+		}
+		if c.InstructionFiles != nil {
+			p.InstructionFiles = append([]string{}, c.InstructionFiles...)
+		}
+	}
+	applyContext(c.Context)
+	if c.FS.MetadataCacheTTL != nil {
+		ttl, err := parseMetadataCacheTTL(*c.FS.MetadataCacheTTL)
+		if err != nil {
+			return nil, err
+		}
+		p.MetadataCacheTTL = ttl
+	}
 	p.Allow = append(p.Allow, DefaultAllow...)
 	p.Allow = append(p.Allow, c.Net.Allow...)
 	pm, err := parsePorts(c.Net.Ports)
@@ -191,7 +236,27 @@ func (c *Config) PolicyFor(project string) (*Policy, error) {
 		}
 		p.ExposeRO = append(p.ExposeRO, pc.Sandbox.ExposeRO...)
 		p.PassEnv = append(p.PassEnv, pc.Sandbox.PassEnv...)
+		applyContext(pc.Context)
+		if pc.FS.MetadataCacheTTL != nil {
+			ttl, err := parseMetadataCacheTTL(*pc.FS.MetadataCacheTTL)
+			if err != nil {
+				return nil, err
+			}
+			p.MetadataCacheTTL = ttl
+		}
 	}
+	seenInstructions := map[string]bool{}
+	var names []string
+	for _, name := range p.InstructionFiles {
+		if name == "" || name == "." || name == ".." || filepath.Base(name) != name || strings.ContainsAny(name, "\\\x00\r\n") {
+			return nil, fmt.Errorf("context.instruction_files: expected a project-root filename, got %q", name)
+		}
+		if !seenInstructions[name] {
+			names = append(names, name)
+			seenInstructions[name] = true
+		}
+	}
+	p.InstructionFiles = names
 	for i, e := range p.ExposeRO {
 		p.ExposeRO[i] = filepath.Clean(util.ExpandHome(e, home))
 	}

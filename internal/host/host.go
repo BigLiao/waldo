@@ -35,6 +35,7 @@ type host struct {
 	sess    *yamux.Session
 	hello   proto.Hello
 	scrub   map[string]bool
+	idMaps  idMapFiles
 
 	mu       sync.Mutex
 	children []*exec.Cmd
@@ -46,7 +47,7 @@ func Main(args []string) int {
 	fs := flag.NewFlagSet("host", flag.ContinueOnError)
 	dataDir := fs.String("data-dir", "", "data directory on B")
 	doctor := fs.Bool("doctor", false, "print a JSON environment report and exit")
-	adopt := fs.Bool("adopt", false, "adopt existing agent state (paths on stdin)")
+	adopt := fs.Bool("adopt", false, "share existing agent state (paths on stdin); false disables saved directory bindings")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -57,8 +58,11 @@ func Main(args []string) int {
 	if *doctor {
 		return doctorMain(*dataDir)
 	}
-	if *adopt {
-		return adoptMain(*dataDir)
+	if flagWasSet(fs, "adopt") {
+		if *adopt {
+			return adoptMain(*dataDir)
+		}
+		return unadoptMain(*dataDir)
 	}
 	h := &host{dataDir: *dataDir}
 	// When the SSH link dies we must still clean up: writes to the closed
@@ -95,6 +99,16 @@ func Main(args []string) int {
 		}
 	}
 	return code
+}
+
+func flagWasSet(fs *flag.FlagSet, name string) bool {
+	set := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			set = true
+		}
+	})
+	return set
 }
 
 func (h *host) run() (int, error) {
@@ -166,6 +180,9 @@ func (h *host) runtimeBase() string {
 
 // prepare mounts, stubs and builds the capsule command.
 func (h *host) prepare() (*exec.Cmd, error) {
+	if h.hello.MetadataCacheTTLSeconds < 0 || h.hello.MetadataCacheTTLSeconds > 60 {
+		return nil, fmt.Errorf("invalid metadata cache TTL: %d seconds", h.hello.MetadataCacheTTLSeconds)
+	}
 	base := h.runtimeBase()
 	if err := os.MkdirAll(base, 0o700); err != nil {
 		return nil, err
@@ -178,6 +195,11 @@ func (h *host) prepare() (*exec.Cmd, error) {
 		}
 	}
 	os.WriteFile(filepath.Join(h.runDir, "pid"), []byte(strconv.Itoa(os.Getpid())), 0o600)
+	var err error
+	h.idMaps, err = prepareIDMaps(h.runDir, h.hello.Facts.UID, h.hello.Facts.GID)
+	if err != nil {
+		return nil, err
+	}
 
 	agentHome := filepath.Join(h.dataDir, "home")
 	if err := os.MkdirAll(agentHome, 0o700); err != nil {
@@ -233,8 +255,22 @@ func (h *host) mount(m, dir string) error {
 	if err := proto.WriteMsg(st, proto.Header{Kind: proto.KindFS, Path: m}); err != nil {
 		return err
 	}
-	opts := "passive,sshfs_sync,dir_cache=no,attr_timeout=0,entry_timeout=0,negative_timeout=0,idmap=none,fsname=waldo:" + strings.ReplaceAll(m, ",", "_")
-	cmd := exec.Command("sshfs", "-f", "-o", opts, ":"+m, dir)
+	opts := "passive,sshfs_sync,fsname=" + escapeFuseValue("waldo:"+strings.ReplaceAll(m, ",", "_"))
+	args := []string{"-f", "-o", opts}
+	cacheable := projectMetadataCacheable(h.hello.Project, m)
+	ttl := time.Duration(h.hello.MetadataCacheTTLSeconds) * time.Second
+	for _, option := range sshfsCacheOptions(ttl, cacheable) {
+		args = append(args, "-o", option)
+	}
+	if !cacheable {
+		ttl = 0
+	}
+	log.Printf("mount %s: metadata_cache_ttl=%s", m, ttl)
+	for _, option := range h.idMaps.options() {
+		args = append(args, "-o", option)
+	}
+	args = append(args, ":"+m, dir)
+	cmd := exec.Command("sshfs", args...)
 	cmd.Stdin = st
 	cmd.Stdout = st
 	var stderr strings.Builder
@@ -357,7 +393,7 @@ func removeRunDir(dir string) {
 		}
 		os.Remove(p)
 	}
-	for _, sub := range []string{"stubs", "s", "pid"} {
+	for _, sub := range []string{"stubs", "s", "pid", "uidmap", "gidmap"} {
 		os.RemoveAll(filepath.Join(dir, sub))
 	}
 	os.Remove(filepath.Join(dir, "m"))

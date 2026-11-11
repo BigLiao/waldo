@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"waldo/internal/audit"
+	"waldo/internal/bootstrap"
 	"waldo/internal/config"
 	"waldo/internal/host"
 	"waldo/internal/profile"
@@ -27,7 +28,8 @@ import (
 const usage = `waldo — Agent 跑在你的服务器上，它的"手"落在这台机器的沙箱里
 
 用法:
-  waldo setup <user@host> [--adopt-login]   配置服务器，安装 B 端二进制并检查依赖
+  waldo setup <user@host> [--adopt-login=false] [--skip-deps]
+                                             默认复用 B 的配置和登录，自动补齐依赖并检查
   waldo <agent> [参数...]                     运行 Agent（内置: %s）
   waldo run [--] <命令> [参数...]             用空 profile 运行任意 CLI Agent
   waldo doctor                                检查两端依赖、时钟偏差、Agent 安装/登录
@@ -105,7 +107,8 @@ func Main(args []string) int {
 
 func setup(cfg *config.Config, args []string) int {
 	fs := flag.NewFlagSet("setup", flag.ContinueOnError)
-	adopt := fs.Bool("adopt-login", false, "复用 B 上已有的 Agent 登录状态")
+	adopt := fs.Bool("adopt-login", true, "复用 B 上已有的 Agent 配置和登录；设为 false 停止共享已有目录")
+	skipDeps := fs.Bool("skip-deps", false, "跳过自动安装系统依赖（仍运行 doctor）")
 	var hostArg string
 	var rest []string
 	for _, a := range args {
@@ -118,12 +121,23 @@ func setup(cfg *config.Config, args []string) int {
 	if err := fs.Parse(rest); err != nil {
 		return 2
 	}
+	if fs.NArg() != 0 {
+		fmt.Fprintln(os.Stderr, "waldo: setup 只接受一个服务器地址")
+		return 2
+	}
 	if hostArg == "" {
 		hostArg = cfg.Host
 	}
 	if hostArg == "" {
-		fmt.Fprintln(os.Stderr, "用法: waldo setup <user@host> [--adopt-login]")
+		fmt.Fprintln(os.Stderr, "用法: waldo setup <user@host> [--adopt-login=false] [--skip-deps]")
 		return 2
+	}
+	if !*skipDeps {
+		fmt.Println("A（本机）：检查并安装缺少的系统依赖…")
+		if err := bootstrap.Install("a", profileNeeds(cfg.Profiles()), os.Stdin, os.Stdout, os.Stderr); err != nil {
+			fmt.Fprintf(os.Stderr, "waldo: A 端依赖初始化失败: %v\n", err)
+			return 1
+		}
 	}
 	if hostArg != cfg.Host {
 		if err := config.SetHost(hostArg); err != nil {
@@ -134,23 +148,39 @@ func setup(cfg *config.Config, args []string) int {
 		fmt.Printf("✓ 已写入 %s: host = %q\n", config.Path(), hostArg)
 	}
 	tr := session.SSHTransport(cfg, hostArg)
+	if !*skipDeps {
+		cmd, err := bootstrap.Command("b", nil)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "waldo: %v\n", err)
+			return 1
+		}
+		fmt.Printf("B（%s）：检查并安装缺少的系统依赖…\n", termfilter.Sanitize(hostArg))
+		if err := tr.RunInteractive(cmd, os.Stdin, os.Stdout, os.Stderr); err != nil {
+			fmt.Fprintf(os.Stderr, "waldo: B 端依赖初始化失败: %v\n", err)
+			return 1
+		}
+	}
 	if _, err := tr.Run([]string{"version"}, nil); err != nil {
 		fmt.Fprintf(os.Stderr, "waldo: %v\n", err)
 		return 1
 	}
 	fmt.Printf("✓ B 上已安装 waldo %s（%s/bin/waldo）\n", proto.FullVersion(), cfg.RemoteDirOrDefault())
+	var paths []string
 	if *adopt {
-		var paths []string
 		for _, p := range cfg.Profiles() {
 			paths = append(paths, p.State...)
 		}
-		out, err := tr.Run([]string{"host", "--data-dir", "@DATA@", "--adopt"}, []byte(strings.Join(paths, "\n")+"\n"))
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "waldo: %v\n", err)
-			return 1
-		}
-		fmt.Print(indent(termfilter.Sanitize(string(out))))
-		fmt.Println("✓ 已复用 B 上的现有登录状态（目录直接绑定进胶囊，单个文件复制一份）")
+	}
+	out, err := tr.Run([]string{"host", "--data-dir", "@DATA@", "--adopt=" + strconv.FormatBool(*adopt)}, []byte(strings.Join(paths, "\n")))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "waldo: %v\n", err)
+		return 1
+	}
+	fmt.Print(indent(termfilter.Sanitize(string(out))))
+	if *adopt {
+		fmt.Println("✓ 已启用 B 上已有 Agent 配置和登录的复用（目录共享，单个文件首次复制）")
+	} else {
+		fmt.Println("✓ 已停止共享 B 上已有的 Agent 状态目录（保留 waldo 的独立状态和已有文件副本）")
 	}
 	return doctor(cfg)
 }
@@ -171,6 +201,21 @@ func mark(ok, warn bool) string {
 		return "!"
 	}
 	return "✗"
+}
+
+func profileNeeds(profiles map[string]profile.Profile) []string {
+	needs := map[string]bool{}
+	for _, p := range profiles {
+		for _, n := range p.Needs {
+			needs[n] = true
+		}
+	}
+	var names []string
+	for n := range needs {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
 }
 
 func doctor(cfg *config.Config) int {
@@ -208,18 +253,7 @@ func doctor(cfg *config.Config) int {
 		return false
 	}
 	profiles := cfg.Profiles()
-	needs := map[string]bool{}
-	for _, p := range profiles {
-		for _, n := range p.Needs {
-			needs[n] = true
-		}
-	}
-	var names []string
-	for n := range needs {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-	for _, n := range names {
+	for _, n := range profileNeeds(profiles) {
 		p, err := exec.LookPath(n)
 		ok := err == nil && visible(p)
 		detail := p

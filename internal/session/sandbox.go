@@ -29,11 +29,12 @@ const ProxyPort = 39339
 
 // Sandbox is a running A-side sandbox.
 type Sandbox struct {
-	Facts   proto.Facts
-	Project string
-	Policy  *netpolicy.Policy
-	Fwd     *netpolicy.Forwarder
-	Audit   *audit.Logger
+	Facts            proto.Facts
+	Project          string
+	Policy           *netpolicy.Policy
+	Fwd              *netpolicy.Forwarder
+	Audit            *audit.Logger
+	MetadataCacheTTL time.Duration
 
 	stop func()
 	sess *yamux.Session
@@ -41,13 +42,14 @@ type Sandbox struct {
 
 // SandboxOptions configures StartSandbox.
 type SandboxOptions struct {
-	Home    string
-	Project string
-	Policy  *config.Policy
-	Audit   *audit.Logger
-	DataDir string
-	Mkdirs  []string
-	OnPorts func(active []int)
+	Home         string
+	Project      string
+	Policy       *config.Policy
+	Audit        *audit.Logger
+	DataDir      string
+	Mkdirs       []string
+	OnPorts      func(active []int)
+	ContextGuide []byte
 }
 
 var passEnv = []string{
@@ -133,6 +135,24 @@ func StartSandbox(o SandboxOptions) (*Sandbox, error) {
 		Home: o.Home, SandboxHome: sbHome, Project: o.Project, ExposeRO: expose, Exe: exe,
 		Env: []string{"HOME=" + o.Home, "PATH=" + pathv},
 	}
+	cleanupContext := func() {}
+	keepContext := false
+	defer func() {
+		if !keepContext {
+			cleanupContext()
+		}
+	}()
+	if len(o.ContextGuide) > 0 {
+		dir, err := os.MkdirTemp(o.DataDir, "context-")
+		if err != nil {
+			return nil, err
+		}
+		cleanupContext = func() { os.RemoveAll(dir) }
+		if err := os.WriteFile(filepath.Join(dir, "waldo.md"), o.ContextGuide, 0o444); err != nil {
+			return nil, err
+		}
+		spec.ContextDir = dir
+	}
 	cmd, err := sandbox.Default().Command(spec)
 	if err != nil {
 		return nil, err
@@ -169,8 +189,8 @@ func StartSandbox(o SandboxOptions) (*Sandbox, error) {
 		stop()
 		return nil, err
 	}
-	sb := &Sandbox{Project: o.Project, Audit: o.Audit, sess: sess}
-	sb.stop = func() { sess.Close(); stop() }
+	sb := &Sandbox{Project: o.Project, Audit: o.Audit, MetadataCacheTTL: o.Policy.MetadataCacheTTL, sess: sess}
+	sb.stop = func() { sess.Close(); stop(); cleanupContext() }
 	sb.Policy = netpolicy.New(o.Policy, o.Audit)
 	sb.Fwd = &netpolicy.Forwarder{
 		Mode:    o.Policy.Ports,
@@ -186,6 +206,10 @@ func StartSandbox(o SandboxOptions) (*Sandbox, error) {
 		return nil, err
 	}
 	cfg := proto.SandboxConfig{BaseEnv: base, ExecEnv: ProxyEnv(), ProxyPort: ProxyPort, HostPorts: o.Policy.HostPorts, Mkdirs: o.Mkdirs}
+	if spec.ContextDir != "" {
+		cfg.ContextProject = o.Project
+		cfg.InstructionFiles = o.Policy.InstructionFiles
+	}
 	if err := proto.WriteMsg(ctl, proto.Header{Kind: proto.KindSandbox}); err != nil {
 		sb.Close()
 		return nil, err
@@ -216,6 +240,7 @@ func StartSandbox(o SandboxOptions) (*Sandbox, error) {
 		}
 	}()
 	go sb.acceptLoop()
+	keepContext = true
 	return sb, nil
 }
 

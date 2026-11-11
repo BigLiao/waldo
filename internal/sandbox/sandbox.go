@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 
+	"waldo/internal/proto"
 	"waldo/internal/util"
 )
 
@@ -25,6 +26,7 @@ type Spec struct {
 	ExposeRO    []string // extra read-only paths (toolchains, user config)
 	Exe         string   // waldo binary on the host
 	Env         []string // initial environment of sandbox-serve
+	ContextDir  string   // private host directory containing the session guide
 }
 
 // Backend starts a process that runs `waldo sandbox-serve` inside a sandbox.
@@ -147,6 +149,9 @@ func BwrapArgs(s Spec) ([]string, error) {
 	}
 	for _, p := range Protected(s.Project) {
 		a = append(a, "--ro-bind", p, p)
+	}
+	if s.ContextDir != "" {
+		a = append(a, "--ro-bind", s.ContextDir, proto.ContextDir)
 	}
 	a = append(a, "--ro-bind", s.Exe, InnerExe, "--chdir", s.Project, "--clearenv")
 	for _, e := range s.Env {
