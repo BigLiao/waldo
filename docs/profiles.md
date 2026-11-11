@@ -1,0 +1,47 @@
+# Agent profile
+
+每个 Agent 一份声明式配置，内置的在 `internal/profile/profiles.toml`。核心代码里没有任何 Agent 的名字。用户可在 `~/.config/waldo/config.toml` 用同名 `[agent.<name>]` 覆盖字段（未写的字段沿用内置值），或新增 Agent。
+
+| 字段 | 含义 |
+|---|---|
+| `bin` | 在 B 上查找的可执行文件（B 的 PATH、`~/.local/bin` 等常见目录，最后用登录 shell 的 `command -v`）。可写绝对路径或 `~/...` |
+| `args` | 放在用户参数之前的固定参数 |
+| `env` | 给 Agent 进程的额外环境变量 |
+| `shared` | Agent 进程写、而命令执行侧（A）要读的路径，会投射到 A 沙箱（`/tmp` 和项目目录总是投射） |
+| `scrub` | 凭证类变量：保留在 B 上的 Agent 环境里，但绝不随命令带到 A |
+| `needs` | `waldo doctor` 在 A 上检查的命令 |
+| `state` | Agent 在 B 上的状态路径（`~/` 开头）：doctor 据此判断是否已登录；`waldo setup --adopt-login` 把其中已存在的**目录**绑定进胶囊（与 B 上原生 Agent 共用），**文件**复制一份到胶囊 HOME（单文件绑定会让 rename 覆盖失败） |
+
+内置：
+
+```toml
+[agent.claude]
+bin    = "claude"
+env    = { USE_BUILTIN_RIPGREP = "0", DISABLE_AUTOUPDATER = "1" }
+shared = ["~/.claude/shell-snapshots"]
+scrub  = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"]
+needs  = ["rg", "git", "bash"]
+state  = ["~/.claude", "~/.claude.json"]
+
+[agent.codex]
+bin    = "codex"
+args   = ["--sandbox", "danger-full-access"]   # 由 waldo 的沙箱接管（审批策略不变）
+scrub  = ["OPENAI_API_KEY", "CODEX_API_KEY"]
+needs  = ["git", "bash"]
+state  = ["~/.codex"]
+```
+
+`waldo run -- <命令>` 使用空 profile（只有 `bin`）。
+
+## Agent 二进制如何进入胶囊
+
+- ELF 二进制：解析符号链接后只读绑定到 `/run/waldo/agent/<名字>` 再执行。
+- `#!` 脚本（例如 npm 安装的 node 脚本）：解释器从 **B** 上解析（`/usr/bin/env node` → B 的 node），绑定到 `/run/waldo/agent/interp-<名字>`；脚本所在的 `node_modules` 树按原路径只读绑定。否则解释器会是 stub，Agent 本身就会被转发到 A 去执行。
+- 胶囊里 A 的 PATH 上每个目录都是 stub 目录，所以 Agent 起的任何子进程（包括写死的 `/bin/bash`）都在 A 上运行。Agent 包内部自带的原生二进制（不在 PATH 目录里）仍在 B 上运行。
+
+## 实测记录
+
+| Agent | 版本 | 结论 |
+|---|---|---|
+| Claude Code | 2.1.322 | `-p` 与交互式 TUI 均可用；Bash 工具在 A 沙箱执行；Write 工具（临时文件 + rename）经 FUSE 落到 A；shell 快照在 `~/.claude/shell-snapshots`、cwd 记录文件在 `/tmp`，与 profile 一致 |
+| Codex | — | 未在本机实测（未安装）；`--sandbox danger-full-access` 参数沿用设计假设 |

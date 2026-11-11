@@ -1,0 +1,17 @@
+# Built-in agent profiles. Users may add or override profiles in
+# ~/.config/waldo/config.toml with the same [agent.<name>] tables.
+
+[agent.claude]
+bin    = "claude"
+env    = { USE_BUILTIN_RIPGREP = "0", DISABLE_AUTOUPDATER = "1" }
+shared = ["~/.claude/shell-snapshots"]
+scrub  = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"]
+needs  = ["rg", "git", "bash"]
+state  = ["~/.claude", "~/.claude.json"]
+
+[agent.codex]
+bin    = "codex"
+args   = ["--sandbox", "danger-full-access"]
+scrub  = ["OPENAI_API_KEY", "CODEX_API_KEY"]
+needs  = ["git", "bash"]
+state  = ["~/.codex"]
