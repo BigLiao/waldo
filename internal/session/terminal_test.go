@@ -78,20 +78,36 @@ func TestTerminalRelayChild(t *testing.T) {
 		want = 7
 	}
 	var input io.Reader = &frames
-	var cancelReconnect func() bool
+	var rc *relayReconnect
 	if ending == "cancel" {
 		r, w := io.Pipe()
 		defer r.Close()
 		defer w.Close()
 		go io.Copy(w, &frames)
 		input = r
-		cancelReconnect = func() bool { r.Close(); return true }
+		rc = &relayReconnect{cancel: func() bool { r.Close(); return true }}
 	}
-	if got := relayAgentIOCancelable(util.RWC{R: input, W: io.Discard}, true, cancelReconnect); got != want {
+	if got := relayAgentIOCancelable(util.RWC{R: input, W: io.Discard}, true, rc); got != want {
 		t.Errorf("exit code %d, want %d", got, want)
 	}
 	after, err := term.GetState(0)
 	if err != nil || !reflect.DeepEqual(before, after) {
 		t.Errorf("tty attributes not restored: %v", err)
+	}
+}
+
+func TestReconnectNoticeStaysOnBottomRow(t *testing.T) {
+	down := reconnectNotice(24, 40, false)
+	if !strings.HasPrefix(down, "\x1b7\x1b[24;1H\x1b[2K") || !strings.HasSuffix(down, "\x1b8") {
+		t.Fatalf("notice must save cursor, draw on the last row and restore: %q", down)
+	}
+	if strings.ContainsAny(down, "\r\n") {
+		t.Fatalf("notice must not scroll the agent screen: %q", down)
+	}
+	if got := reconnectNotice(24, 40, true); got != "\x1b7\x1b[24;1H\x1b[2K\x1b8" {
+		t.Fatalf("recovery should only clear the row: %q", got)
+	}
+	if got := truncateCells("ab连接", 5); got != "ab连" {
+		t.Fatalf("truncateCells = %q", got)
 	}
 }

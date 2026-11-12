@@ -18,6 +18,14 @@ import (
 	"waldo/internal/util"
 )
 
+// ReconnectMessage is the user-facing notice for a link state change.
+func ReconnectMessage(up bool) string {
+	if up {
+		return "连接已恢复，继续原会话"
+	}
+	return "连接中断，正在尝试重连（最多 90 秒，Ctrl+C 取消）"
+}
+
 func (c *Conn) ReconnectExpired() bool {
 	link, ok := c.RW.(*reconnect.Stream)
 	return ok && errors.Is(link.Err(), reconnect.ErrTimeout)
@@ -39,21 +47,26 @@ func (s *SSH) OpenResumable() (*Conn, error) {
 	ready := make(chan struct{})
 	var initial sync.Once
 	var attached bool // State callbacks are serialized by Stream.Serve.
-	status := func(message string) {
-		fmt.Fprintf(os.Stderr, "\r\nwaldo: %s\r\n", message)
+	ctx, cancel := context.WithCancel(context.Background())
+	conn := &Conn{RW: link, closeFunc: func() { link.Close(); cancel() }, reconnecting: func() bool { return !link.Connected() }}
+	status := func(up bool) {
+		if f := conn.notice.Load(); f != nil {
+			(*f)(up)
+			return
+		}
+		fmt.Fprintf(os.Stderr, "\r\nwaldo: %s\r\n", ReconnectMessage(up))
 	}
 	link.State = func(up bool) {
 		if up {
 			if attached {
-				status("连接已恢复，继续原会话")
+				status(true)
 			}
 			attached = true
 			initial.Do(func() { close(ready) })
 		} else if link.Err() == nil {
-			status("连接中断，正在尝试重连（最多 90 秒，Ctrl+C 取消）")
+			status(false)
 		}
 	}
-	ctx, cancel := context.WithCancel(context.Background())
 	go func() { <-link.Done(); cancel() }()
 	go func() {
 		physical := first
@@ -83,7 +96,7 @@ func (s *SSH) OpenResumable() (*Conn, error) {
 	}()
 	select {
 	case <-ready:
-		return &Conn{RW: link, closeFunc: func() { link.Close(); cancel() }, reconnecting: func() bool { return !link.Connected() }}, nil
+		return conn, nil
 	case <-link.Done():
 		link.Close()
 		return nil, link.Err()

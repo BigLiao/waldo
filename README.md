@@ -85,6 +85,28 @@ waldo link claude
 
 按提示把一行 `export PATH=...` 加进 `~/.bashrc` 或 `~/.zshrc`，此后直接敲 `claude`，背后就是 waldo。不想要了，`waldo link --remove claude` 即可还原。
 
+## 在 Paseo 聊天界面中使用
+
+支持通过 [Paseo](https://paseo.sh) 聊天界面使用远端 Claude Code。完成 `waldo setup` 后，在**代码所在机器**运行 Paseo daemon，并将以下配置合入 `~/.paseo/config.json`（设置了 `PASEO_HOME` 时为 `$PASEO_HOME/config.json`）。将 waldo 路径替换为 `command -v waldo` 查到的绝对路径：
+
+```json
+{
+  "agents": {
+    "providers": {
+      "waldo-claude": {
+        "extends": "claude",
+        "label": "Claude via Waldo",
+        "command": ["/home/me/.local/bin/waldo", "claude"]
+      }
+    }
+  }
+}
+```
+
+执行 `paseo reload`（daemon 未运行时先执行 `paseo daemon start`），然后在 Paseo 中选择项目，新建聊天并选择 **Claude via Waldo** 即可。账号留在远端，文件操作和命令执行仍在本机沙箱中。详见 [Paseo provider 配置](https://paseo.sh/docs/custom-providers)。
+
+连接中断导致进程退出时，本轮聊天会报错；网络恢复后可在原聊天中发消息尝试恢复对话，执行到一半的命令不会自动恢复。
+
 ## 常用命令
 
 | 命令 | 用途 |

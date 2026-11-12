@@ -259,13 +259,16 @@ func runRemote(o Options, host string, sb *Sandbox, id, cwd, project string, mou
 		warnf("%v", err)
 		return 255
 	}
-	code := relayAgentIOCancelable(ios, interactive, func() bool {
-		if conn.Reconnecting() {
-			bs.Close()
-			conn.Close()
-			return true
-		}
-		return false
+	code := relayAgentIOCancelable(ios, interactive, &relayReconnect{
+		cancel: func() bool {
+			if conn.Reconnecting() {
+				bs.Close()
+				conn.Close()
+				return true
+			}
+			return false
+		},
+		watch: conn.OnReconnect,
 	})
 	if conn.ReconnectExpired() {
 		warnf("90 秒内未能恢复连接，本次会话已结束")
@@ -344,8 +347,20 @@ func relayAgentIO(st io.ReadWriteCloser, interactive bool) int {
 	return relayAgentIOCancelable(st, interactive, nil)
 }
 
-func relayAgentIOCancelable(st io.ReadWriteCloser, interactive bool, cancelReconnect func() bool) int {
+// relayReconnect lets a resumable link cancel a pending reconnect and show
+// its state without disturbing the agent's full-screen UI.
+type relayReconnect struct {
+	cancel func() bool
+	watch  func(func(up bool)) func()
+}
+
+func relayAgentIOCancelable(st io.ReadWriteCloser, interactive bool, rc *relayReconnect) int {
+	var cancelReconnect func() bool
+	if rc != nil {
+		cancelReconnect = rc.cancel
+	}
 	fw := proto.NewFrameWriter(st)
+	var outMu sync.Mutex // agent output and reconnect notices share the terminal
 	restoreTerminal := func() {}
 	if interactive {
 		old, err := term.MakeRaw(0)
@@ -405,6 +420,25 @@ func relayAgentIOCancelable(st io.ReadWriteCloser, interactive bool, cancelRecon
 	if term.IsTerminal(1) {
 		out = termfilter.New(os.Stdout)
 	}
+	if interactive && rc != nil && rc.watch != nil && term.IsTerminal(1) {
+		defer rc.watch(func(up bool) {
+			outMu.Lock()
+			defer outMu.Unlock()
+			cols, rows, err := term.GetSize(1)
+			if err != nil {
+				return
+			}
+			io.WriteString(os.Stdout, reconnectNotice(rows, cols, up))
+			if up {
+				// The notice overwrote part of the agent's screen; a size
+				// change makes it repaint everything.
+				if rows > 1 {
+					fw.WriteJSON(proto.FResize, proto.Resize{Rows: uint16(rows - 1), Cols: uint16(cols)})
+				}
+				fw.WriteJSON(proto.FResize, proto.Resize{Rows: uint16(rows), Cols: uint16(cols)})
+			}
+		})()
+	}
 	if term.IsTerminal(2) {
 		errw = termfilter.New(os.Stderr)
 	}
@@ -420,7 +454,9 @@ func relayAgentIOCancelable(st io.ReadWriteCloser, interactive bool, cancelRecon
 		}
 		switch typ {
 		case proto.FStdout:
+			outMu.Lock()
 			out.Write(p)
+			outMu.Unlock()
 		case proto.FStderr, proto.FError:
 			errw.Write(p)
 		case proto.FExit:

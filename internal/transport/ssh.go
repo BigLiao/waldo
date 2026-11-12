@@ -16,6 +16,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"golang.org/x/term"
 
@@ -36,6 +37,14 @@ type Conn struct {
 	closeOnce    sync.Once
 	closeFunc    func()
 	reconnecting func() bool
+	notice       atomic.Pointer[func(up bool)]
+}
+
+// OnReconnect replaces the default stderr reconnect notices while an
+// interactive relay owns the terminal. The returned function removes it.
+func (c *Conn) OnReconnect(f func(up bool)) func() {
+	c.notice.Store(&f)
+	return func() { c.notice.CompareAndSwap(&f, nil) }
 }
 
 // Close terminates the link.
