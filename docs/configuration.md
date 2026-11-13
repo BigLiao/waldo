@@ -64,6 +64,9 @@ pass_env  = ["ANTHROPIC_MODEL", "MY_APP_*"]   # 额外传入沙箱和 Agent 的�
 metadata_cache_ttl = "10s"         # 项目属性/路径缓存，默认 10 秒；"0s" 关闭
 content_cache_ttl = "10s"          # SFTP 内容缓存最大年龄；"0s" 关闭代理、沿用旧挂载方式
 
+[observe]
+enabled = true                   # 默认启用模型调用统计，可省略 --observe；默认 false
+
 [net]
 allow = ["api.staging.example.com"]   # 在内置白名单（常见包仓库、GitHub）之上追加
 ports = "auto"                        # "auto" | [3000, 5173] | "off"
@@ -74,6 +77,7 @@ net.allow = ["api.example.com"]
 net.host_ports = [5432, 6379]
 fs.metadata_cache_ttl = "30s"      # 当前项目覆盖全局 TTL
 fs.content_cache_ttl = "30s"
+observe.enabled = false          # 此项目关闭全局模型统计设置
 
 [agent.claude]                        # 覆盖/新增 Agent profile，见 docs/profiles.md
 env = { CLAUDE_CODE_MAX_OUTPUT_TOKENS = "16000" }
@@ -86,21 +90,34 @@ env = { CLAUDE_CODE_MAX_OUTPUT_TOKENS = "16000" }
 无需额外服务，仍使用本机的 `audit.log` 和原有查看命令：
 
 ```sh
-waldo claude --observe     # 或 waldo codex --observe；仅模型统计需要此参数
+waldo claude --observe     # 或 waldo codex --observe；也可通过配置默认开启
 waldo log -f               # 在另一个终端查看；-s <会话ID> 筛选单次会话
 ```
+
+在本机 `~/.config/waldo/config.toml` 中设置后，普通的 `waldo claude` / `waldo codex` 就会启用模型统计：
+
+```toml
+[observe]
+enabled = true
+
+# 可选：按项目覆盖全局设置
+[project."/home/me/work/shop".observe]
+enabled = false
+```
+
+优先级是命令行 > 当前项目配置 > 全局配置，未配置时默认关闭。`--observe` 或 `--observe=true` 临时开启，`--observe=false` 临时关闭，新会话生效。命令和文件读写日志始终记录，不受这个模型遥测开关影响。
 
 | 日志类型 | 内容与耗时范围 |
 |---|---|
 | `exec` / `exec-end` | 关联 ID、程序名、退出状态、耗时；从 A 可信客户端收到命令请求，到观察到退出结果，包含沙箱执行、输出收尾和缓存失效屏障，不是纯程序运行时间，也不包含完整的 B 端工具调用时间 |
 | `file-read` / `file-write` | 每 5 秒汇总已完成的 SFTP 读写请求次数和累计耗时，流结束时补一次汇总；包含 OPEN 和属性、目录等请求，次数不等于文件数，失败回复也算完成；`scope=sftp_rpc` |
-| `model-call` | `--observe` 开启后，原生客户端报告的模型请求次数、错误数和累计 `duration_ms`；Codex 的流事件处理时间另列 `stream_event_ms`，不能将它或 HTTP 请求耗时当作完整生成时长 |
+| `model-call` | 通过配置或 `--observe` 开启后，原生客户端报告的模型请求次数、错误数和累计 `duration_ms`；Codex 的流事件处理时间另列 `stream_event_ms`，不能将它或 HTTP 请求耗时当作完整生成时长 |
 
 文件统计位于 A 的转发边界，只覆盖实际到达 A 的 RPC；B 的缓存命中，以及 A 上 shell 子进程直接进行的本地文件访问不在其中。各项耗时可重叠，尤其多个文件请求并发时，累计值可能超过会话时长；不能将这些值直接相加或当作会话占比。未观测到操作的时间不标记为“模型思考”。断流的命令记为 `disconnected`，没有退出帧时不推测退出码；未完成或超出统计容量的文件请求另记 `file-stats-dropped`。
 
-模型统计复用 [Claude Code](https://code.claude.com/docs/en/monitoring-usage) 和 [Codex](https://learn.chatgpt.com/docs/config-file/config-advanced) 自带的异步 OpenTelemetry 日志，B 上临时启动仅监听回环地址、使用随机会话路径的 JSON 接收器，只提取固定数值字段，再复用现有 SSH 连接批量传到 A。不代理模型 API、不增加模型请求、不注入 MCP，也不修改持久配置。`--observe` 会为本次进程配置本地日志 exporter；需要保留原有日志 exporter 时不要开启。模型输入、响应和工具内容不写入新增统计日志；原有命令与写操作审计保持原样。
+模型统计复用 [Claude Code](https://code.claude.com/docs/en/monitoring-usage) 和 [Codex](https://learn.chatgpt.com/docs/config-file/config-advanced) 自带的异步 OpenTelemetry 日志，B 上临时启动仅监听回环地址、使用随机会话路径的 JSON 接收器，只提取固定数值字段，再复用现有 SSH 连接批量传到 A。不代理模型 API、不增加模型请求、不注入 MCP，也不修改持久配置。启用模型统计会为本次进程配置本地日志 exporter；需要保留原有日志 exporter 时不要开启。模型输入、响应和工具内容不写入新增统计日志；原有命令与写操作审计保持原样。
 
-默认不开启客户端原生遥测；命令和文件统计始终保留。遥测导出、转发是尽力而为的，断线、接收器不可用或 Agent 版本不支持相关事件时可能缺少模型统计，不会回退为估算模型时间，也不会阻止命令和文件操作。自定义 Agent 可配置 `telemetry` 适配器，见 [profiles.md](profiles.md)。普通遥测事件经过批处理，日志出现时间会晚于实际操作；本实现没有逐请求文件明细、全量进程跟踪或模型调用的关键路径分析。
+未配置时默认不开启客户端原生遥测；命令和文件统计始终保留。遥测导出、转发是尽力而为的，断线、接收器不可用或 Agent 版本不支持相关事件时可能缺少模型统计，不会回退为估算模型时间，也不会阻止命令和文件操作。自定义 Agent 可配置 `telemetry` 适配器，见 [profiles.md](profiles.md)。普通遥测事件经过批处理，日志出现时间会晚于实际操作；本实现没有逐请求文件明细、全量进程跟踪或模型调用的关键路径分析。
 
 ## 文件投射性能
 

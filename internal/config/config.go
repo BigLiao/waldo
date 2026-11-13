@@ -58,6 +58,10 @@ type FSCfg struct {
 	ContentCacheTTL  *string `toml:"content_cache_ttl"`
 }
 
+type ObserveCfg struct {
+	Enabled *bool `toml:"enabled"`
+}
+
 type NetCfg struct {
 	Allow        []string `toml:"allow"`
 	Ports        any      `toml:"ports"` // "auto" | "off" | [3000, 5173]
@@ -70,6 +74,7 @@ type ProjectCfg struct {
 	Sandbox SandboxCfg `toml:"sandbox"`
 	Context ContextCfg `toml:"context"`
 	FS      FSCfg      `toml:"fs"`
+	Observe ObserveCfg `toml:"observe"`
 }
 
 type Config struct {
@@ -79,6 +84,7 @@ type Config struct {
 	Sandbox   SandboxCfg                 `toml:"sandbox"`
 	Context   ContextCfg                 `toml:"context"`
 	FS        FSCfg                      `toml:"fs"`
+	Observe   ObserveCfg                 `toml:"observe"`
 	Net       NetCfg                     `toml:"net"`
 	Project   map[string]ProjectCfg      `toml:"project"`
 	Agent     map[string]profile.Profile `toml:"agent"`
@@ -133,6 +139,7 @@ type Policy struct {
 	InstructionFiles []string
 	MetadataCacheTTL time.Duration
 	ContentCacheTTL  time.Duration
+	ObserveEnabled   bool
 }
 
 // DefaultAllow lists common package registries and GitHub.
@@ -200,6 +207,9 @@ func (c *Config) PolicyFor(project string) (*Policy, error) {
 		}
 	}
 	applyContext(c.Context)
+	if c.Observe.Enabled != nil {
+		p.ObserveEnabled = *c.Observe.Enabled
+	}
 	contentCacheExplicit := c.FS.ContentCacheTTL != nil
 	if c.FS.ContentCacheTTL != nil {
 		ttl, err := parseCacheTTL("content_cache_ttl", *c.FS.ContentCacheTTL)
@@ -251,6 +261,9 @@ func (c *Config) PolicyFor(project string) (*Policy, error) {
 		p.ExposeRO = append(p.ExposeRO, pc.Sandbox.ExposeRO...)
 		p.PassEnv = append(p.PassEnv, pc.Sandbox.PassEnv...)
 		applyContext(pc.Context)
+		if pc.Observe.Enabled != nil {
+			p.ObserveEnabled = *pc.Observe.Enabled
+		}
 		if pc.FS.ContentCacheTTL != nil {
 			contentCacheExplicit = true
 			ttl, err := parseCacheTTL("content_cache_ttl", *pc.FS.ContentCacheTTL)

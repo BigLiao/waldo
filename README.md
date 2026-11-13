@@ -135,7 +135,7 @@ waldo allow api.example.com
 
 更细的设置，例如传入额外的环境变量、让沙箱访问本机数据库、为不同项目分别配置，都写在 `~/.config/waldo/config.toml` 里，详见 [配置参考](docs/configuration.md)。
 
-排查卡顿时，在另一个终端运行 `waldo log -f`：`exec-end` 显示命令耗时和退出状态，`file-read` / `file-write` 每 5 秒汇总一次文件 RPC。需要模型请求统计时，以 `waldo claude --observe` 或 `waldo codex --observe` 启动，额外查看 `model-call`。统计不保存文件内容或命令输出，也不把无活动时间当作模型调用；各项耗时的范围见[轻量运行日志](docs/configuration.md#轻量运行日志)。
+排查卡顿时，在另一个终端运行 `waldo log -f`：`exec-end` 显示命令耗时和退出状态，`file-read` / `file-write` 每 5 秒汇总一次文件 RPC。需要模型请求统计时，以 `waldo claude --observe` 或 `waldo codex --observe` 启动，也可在配置中设置 `[observe] enabled = true` 默认开启，额外查看 `model-call`。`--observe=false` 可临时关闭。统计不保存文件内容或命令输出，也不把无活动时间当作模型调用；各项耗时的范围见[轻量运行日志](docs/configuration.md#轻量运行日志)。
 
 ## 安全一览
 

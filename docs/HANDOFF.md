@@ -1,6 +1,6 @@
 # waldo 交接文档
 
-> 2026-11-13 轻量观测：命令新增 `exec-end`（A 转发边界耗时、退出码）；SFTP 读写在 A 每 5 秒汇总 `file-read` / `file-write`。`waldo claude --observe` / `waldo codex --observe` 通过 B 回环 OTLP JSON 接收器，复用原连接汇总 `model-call`；默认不改变原生遥测配置。仅保留数字，不保存新增正文。原生模型事件的耗时不等同于完整生成时间，文件统计不含 B 缓存命中或 A 命令的本地文件访问，范围见 [configuration.md](configuration.md#轻量运行日志)。远端默认执行的方案仍暂停，未合入。
+> 2026-11-13 轻量观测：命令新增 `exec-end`（A 转发边界耗时、退出码）；SFTP 读写在 A 每 5 秒汇总 `file-read` / `file-write`。`waldo claude --observe` / `waldo codex --observe` 通过 B 回环 OTLP JSON 接收器，复用原连接汇总 `model-call`；也可用 `[observe] enabled = true` 全局/按项目启用，命令行 `--observe=false` 临时关闭；未配置时不改变原生遥测配置。仅保留数字，不保存新增正文。原生模型事件的耗时不等同于完整生成时间，文件统计不含 B 缓存命中或 A 命令的本地文件访问，范围见 [configuration.md](configuration.md#轻量运行日志)。远端默认执行的方案仍暂停，未合入。
 
 > 2026-11-13 更新：新增项目 SFTP 读缓存代理与 `fs-watch` 主动失效通道，默认 `content_cache_ttl = "10s"`。写请求保留原有 A 端服务，命令结束等待本会话失效确认；本机普通文件修改由递归 inotify 异步推送。新增实现位于 `internal/fscache`、`internal/fswatch`、`internal/serve/cache.go` 和 `internal/host/cache_proxy.go`。代理模式关闭 SSHFS 独立缓存；目录列表仍直通。下文关于“只有内核元数据缓存、尚无主动失效”的描述为旧实现记录。当前环境无 `/dev/fuse`，完整挂载回归仍需在有 FUSE 的机器上运行，协议和通知链路由真实 SFTP 的内存管道集成测试覆盖。配置及限制见 [configuration.md](configuration.md#文件投射性能)。
 

@@ -32,7 +32,7 @@ import (
 
 // Options for one agent session.
 type Options struct {
-	Observe        bool
+	Observe        *bool // nil inherits global/project configuration
 	Paseo          bool
 	paseoBroker    *paseo.Broker
 	readOnlyMounts []string
@@ -155,6 +155,9 @@ func Run(o Options) int {
 		warnf("%v", err)
 		return 2
 	}
+	if o.Observe != nil {
+		pol.ObserveEnabled = *o.Observe
+	}
 	// Runtime roots stay uncached even when selected as the entire project.
 	if project == "/tmp" || project == proto.ContextDir {
 		pol.MetadataCacheTTL = 0
@@ -196,7 +199,7 @@ func Run(o Options) int {
 		guide = contextGuide(pol, host, o.Profile.Name, cwd, mounts)
 	}
 
-	al.Log("session", map[string]any{"agent": o.Profile.Name, "project": project, "host": host, "args": paseo.AuditArgs(o.Args), "paseo": o.paseoBroker != nil, "observe": o.Observe, "metadata_cache_ttl": pol.MetadataCacheTTL.String(), "content_cache_ttl": pol.ContentCacheTTL.String()})
+	al.Log("session", map[string]any{"agent": o.Profile.Name, "project": project, "host": host, "args": paseo.AuditArgs(o.Args), "paseo": o.paseoBroker != nil, "observe": pol.ObserveEnabled, "metadata_cache_ttl": pol.MetadataCacheTTL.String(), "content_cache_ttl": pol.ContentCacheTTL.String()})
 	snap := sandbox.TakeSnapshot(project)
 
 	state := runState{PID: os.Getpid(), Session: id, Agent: o.Profile.Name, Project: project, Host: host}
@@ -219,7 +222,7 @@ func Run(o Options) int {
 		return 1
 	}
 	defer sb.Close()
-	sb.Observe = o.Observe
+	sb.Observe = pol.ObserveEnabled
 	sb.ModelTelemetry = o.Profile.Telemetry
 
 	code := runRemote(o, host, sb, id, cwd, project, mounts, al)
@@ -271,7 +274,7 @@ func runRemote(o Options, host string, sb *Sandbox, id, cwd, project string, mou
 
 	interactive := term.IsTerminal(0) && term.IsTerminal(1)
 	hello := proto.Hello{
-		Observe: o.Observe,
+		Observe: sb.Observe,
 		Paseo:   o.paseoBroker != nil, ReadOnlyMounts: o.readOnlyMounts,
 		Version: proto.FullVersion(), Session: id, Profile: o.Profile.Wire(), Argv: o.Args,
 		Cwd: cwd, Project: project, Mounts: mounts, Facts: sb.Facts, Interactive: interactive,

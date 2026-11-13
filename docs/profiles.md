@@ -13,7 +13,7 @@
 | `state` | Agent 在 B 上的状态路径（`~/` 开头）：doctor 据此判断是否已登录；`waldo setup` 默认把其中已存在的**目录**绑定进胶囊（与 B 上原生 Agent 共用），**文件**首次复制到胶囊 HOME，已有非空副本保留（单文件绑定会让 rename 覆盖失败） |
 | `mcp_config_flag` | `--paseo` 使用的 MCP 配置参数；目前支持 Claude 风格的 `--mcp-config` JSON/文件参数 |
 | `skill_dir` | `--paseo` 只读投影已安装 Paseo skills 的目标目录，例如 `~/.claude/skills` |
-| `telemetry` | `--observe` 使用的原生遥测适配器：`"claude"`、`"codex"` 或 `"none"`；内置 profile 已配置，自定义 profile 未配置时只记录命令和文件请求 |
+| `telemetry` | 通过配置或 `--observe` 启用的原生遥测适配器：`"claude"`、`"codex"` 或 `"none"`；内置 profile 已配置，自定义 profile 未配置时只记录命令和文件请求 |
 
 内置：
 
