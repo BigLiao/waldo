@@ -26,11 +26,12 @@ import (
 )
 
 type server struct {
-	sess *yamux.Session
-	cfg  proto.SandboxConfig
-	own  map[int]bool // ports this process listens on itself
-	mu   sync.Mutex
-	view *projection.View
+	sess  *yamux.Session
+	cfg   proto.SandboxConfig
+	own   map[int]bool // ports this process listens on itself
+	mu    sync.Mutex
+	view  *projection.View
+	cache *cacheHub
 }
 
 // Main runs sandbox-serve on stdin/stdout.
@@ -65,6 +66,10 @@ func Main() int {
 			return 1
 		}
 	}
+	if s.cfg.CacheProject != "" {
+		s.cache = newCacheHub(s.cfg.CacheProject)
+		defer s.cache.Close()
+	}
 	for _, d := range s.cfg.Mkdirs {
 		os.MkdirAll(d, 0o700)
 	}
@@ -93,6 +98,12 @@ func (s *server) handle(st *yamux.Stream) {
 		return
 	}
 	switch h.Kind {
+	case proto.KindFSWatch:
+		if s.cache == nil || h.Path != s.cfg.CacheProject || h.Exec != nil || h.Host != "" || h.Port != 0 {
+			st.Close()
+			return
+		}
+		s.cache.Serve(st)
 	case proto.KindFS:
 		s.view.Serve(st)
 	case proto.KindExec:
@@ -100,11 +111,17 @@ func (s *server) handle(st *yamux.Stream) {
 			st.Close()
 			return
 		}
-		runExec(st, h.Exec, s.cfg.ExecEnv)
+		runExec(st, h.Exec, s.cfg.ExecEnv, s.cacheBarrier)
 	case proto.KindDial:
 		s.dial(st, h.Port)
 	default:
 		st.Close()
+	}
+}
+
+func (s *server) cacheBarrier() {
+	if s.cache != nil {
+		s.cache.InvalidateAndWait()
 	}
 }
 

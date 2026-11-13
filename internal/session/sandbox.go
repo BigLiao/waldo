@@ -35,6 +35,7 @@ type Sandbox struct {
 	Fwd              *netpolicy.Forwarder
 	Audit            *audit.Logger
 	MetadataCacheTTL time.Duration
+	ContentCacheTTL  time.Duration
 
 	stop func()
 	sess *yamux.Session
@@ -191,7 +192,7 @@ func StartSandbox(o SandboxOptions) (*Sandbox, error) {
 		stop()
 		return nil, err
 	}
-	sb := &Sandbox{Project: o.Project, Audit: o.Audit, MetadataCacheTTL: o.Policy.MetadataCacheTTL, sess: sess}
+	sb := &Sandbox{Project: o.Project, Audit: o.Audit, MetadataCacheTTL: o.Policy.MetadataCacheTTL, ContentCacheTTL: o.Policy.ContentCacheTTL, sess: sess}
 	sb.stop = func() { sess.Close(); stop(); cleanupContext() }
 	sb.Policy = netpolicy.New(o.Policy, o.Audit)
 	sb.Fwd = &netpolicy.Forwarder{
@@ -208,6 +209,9 @@ func StartSandbox(o SandboxOptions) (*Sandbox, error) {
 		return nil, err
 	}
 	cfg := proto.SandboxConfig{BaseEnv: base, ExecEnv: ProxyEnv(), ProxyPort: ProxyPort, HostPorts: o.Policy.HostPorts, Mkdirs: o.Mkdirs}
+	if o.Policy.ContentCacheTTL > 0 {
+		cfg.CacheProject = o.Project
+	}
 	if spec.ContextDir != "" {
 		cfg.ContextProject = o.Project
 		cfg.InstructionFiles = o.Policy.InstructionFiles
@@ -247,7 +251,8 @@ func StartSandbox(o SandboxOptions) (*Sandbox, error) {
 }
 
 // acceptLoop serves streams the sandbox opens towards the host. Only proxy
-// and host-port requests exist; everything else is refused.
+// and host-port requests exist; everything else is refused. Cache watches are
+// opened into the sandbox, never accepted as arbitrary outbound connections.
 func (sb *Sandbox) acceptLoop() {
 	for {
 		st, err := sb.sess.AcceptStream()

@@ -55,6 +55,7 @@ type ContextCfg struct {
 
 type FSCfg struct {
 	MetadataCacheTTL *string `toml:"metadata_cache_ttl"`
+	ContentCacheTTL  *string `toml:"content_cache_ttl"`
 }
 
 type NetCfg struct {
@@ -131,6 +132,7 @@ type Policy struct {
 	ContextEnabled   bool
 	InstructionFiles []string
 	MetadataCacheTTL time.Duration
+	ContentCacheTTL  time.Duration
 }
 
 // DefaultAllow lists common package registries and GitHub.
@@ -170,12 +172,16 @@ func parsePorts(v any) (PortsMode, error) {
 }
 
 func parseMetadataCacheTTL(raw string) (time.Duration, error) {
+	return parseCacheTTL("metadata_cache_ttl", raw)
+}
+
+func parseCacheTTL(name, raw string) (time.Duration, error) {
 	ttl, err := time.ParseDuration(raw)
 	if err != nil {
-		return 0, fmt.Errorf("fs.metadata_cache_ttl: %w", err)
+		return 0, fmt.Errorf("fs.%s: %w", name, err)
 	}
 	if ttl < 0 || ttl > time.Minute || ttl%time.Second != 0 {
-		return 0, fmt.Errorf("fs.metadata_cache_ttl: expected a whole-second duration between 0s and 1m, got %q", raw)
+		return 0, fmt.Errorf("fs.%s: expected a whole-second duration between 0s and 1m, got %q", name, raw)
 	}
 	return ttl, nil
 }
@@ -184,7 +190,7 @@ func parseMetadataCacheTTL(raw string) (time.Duration, error) {
 func (c *Config) PolicyFor(project string) (*Policy, error) {
 	home, _ := os.UserHomeDir()
 	p := &Policy{Project: project, Ports: PortsMode{Mode: "auto"}, ContextEnabled: true,
-		InstructionFiles: []string{"AGENTS.md", "CLAUDE.md"}, MetadataCacheTTL: 10 * time.Second}
+		InstructionFiles: []string{"AGENTS.md", "CLAUDE.md"}, MetadataCacheTTL: 10 * time.Second, ContentCacheTTL: 10 * time.Second}
 	applyContext := func(c ContextCfg) {
 		if c.Enabled != nil {
 			p.ContextEnabled = *c.Enabled
@@ -194,6 +200,14 @@ func (c *Config) PolicyFor(project string) (*Policy, error) {
 		}
 	}
 	applyContext(c.Context)
+	contentCacheExplicit := c.FS.ContentCacheTTL != nil
+	if c.FS.ContentCacheTTL != nil {
+		ttl, err := parseCacheTTL("content_cache_ttl", *c.FS.ContentCacheTTL)
+		if err != nil {
+			return nil, err
+		}
+		p.ContentCacheTTL = ttl
+	}
 	if c.FS.MetadataCacheTTL != nil {
 		ttl, err := parseMetadataCacheTTL(*c.FS.MetadataCacheTTL)
 		if err != nil {
@@ -237,6 +251,14 @@ func (c *Config) PolicyFor(project string) (*Policy, error) {
 		p.ExposeRO = append(p.ExposeRO, pc.Sandbox.ExposeRO...)
 		p.PassEnv = append(p.PassEnv, pc.Sandbox.PassEnv...)
 		applyContext(pc.Context)
+		if pc.FS.ContentCacheTTL != nil {
+			contentCacheExplicit = true
+			ttl, err := parseCacheTTL("content_cache_ttl", *pc.FS.ContentCacheTTL)
+			if err != nil {
+				return nil, err
+			}
+			p.ContentCacheTTL = ttl
+		}
 		if pc.FS.MetadataCacheTTL != nil {
 			ttl, err := parseMetadataCacheTTL(*pc.FS.MetadataCacheTTL)
 			if err != nil {
@@ -244,6 +266,11 @@ func (c *Config) PolicyFor(project string) (*Policy, error) {
 			}
 			p.MetadataCacheTTL = ttl
 		}
+	}
+	// Older configurations used metadata_cache_ttl=0s to bypass all project
+	// caches. Preserve that choice unless a content TTL was explicitly set.
+	if !contentCacheExplicit && p.MetadataCacheTTL == 0 {
+		p.ContentCacheTTL = 0
 	}
 	seenInstructions := map[string]bool{}
 	var names []string

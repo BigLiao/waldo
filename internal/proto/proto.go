@@ -2,7 +2,8 @@
 //
 // Every yamux stream starts with one length-prefixed JSON Header that says
 // what the stream is for. exec and io streams then carry Frames; fs streams
-// carry raw SFTP; net streams carry a Reply followed by raw bytes.
+// carry raw SFTP; fs-watch carries CacheEvent / CacheAck messages; net streams
+// carry a Reply followed by raw bytes.
 package proto
 
 import (
@@ -68,6 +69,7 @@ const (
 	KindCtl      = "ctl"      // A client -> B host: Hello / HelloAck
 	KindIO       = "io"       // A client -> B host: agent stdio (frames)
 	KindFS       = "fs"       // B host -> A sandbox: SFTP
+	KindFSWatch  = "fs-watch" // B host -> A sandbox: cache invalidations / acknowledgements
 	KindExec     = "exec"     // B host -> A sandbox: one forwarded process (frames)
 	KindSandbox  = "sandbox"  // A client -> A sandbox: config, facts, port events
 	KindConnect  = "connect"  // A sandbox -> A client: outbound proxy connection
@@ -130,6 +132,19 @@ type SandboxConfig struct {
 	Mkdirs           []string `json:"mkdirs"`
 	ContextProject   string   `json:"context_project,omitempty"`
 	InstructionFiles []string `json:"instruction_files,omitempty"`
+	CacheProject     string   `json:"cache_project,omitempty"` // independent of context projection
+}
+
+// CacheEvent is a full-project invalidation. Repeated Seq values are heartbeats;
+// a new sequence must be applied before acknowledging it. Enabled=false means
+// the source cannot safely monitor changes and all requests must pass through.
+type CacheEvent struct {
+	Seq     uint64 `json:"seq"`
+	Enabled bool   `json:"enabled"`
+}
+
+type CacheAck struct {
+	Seq uint64 `json:"seq"`
 }
 
 // PortEvent carries the full current set of listening ports in the sandbox.
@@ -165,6 +180,7 @@ type Hello struct {
 	Cols                    uint16   `json:"cols"`
 	TimeUnixMs              int64    `json:"time_unix_ms"`
 	MetadataCacheTTLSeconds int64    `json:"metadata_cache_ttl_seconds"`
+	ContentCacheTTLSeconds  int64    `json:"content_cache_ttl_seconds"`
 }
 
 type HelloAck struct {

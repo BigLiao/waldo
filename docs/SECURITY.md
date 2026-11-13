@@ -14,7 +14,7 @@
 
 | 方向 | 可信进程的处理 |
 |---|---|
-| B → A 的流 | 默认只接受 `fs`（SFTP）和 `exec`；显式使用 `--paseo` 时，额外接受当前会话的 `paseo` MCP 流。其余一律关闭并记审计日志（`TestRejectUnknownStreamsFromB`） |
+| B → A 的流 | 接受 `fs`（SFTP）和 `exec`；启用项目内容缓存时，额外接受当前项目的单个 `fs-watch` 失效订阅；显式使用 `--paseo` 时，接受当前会话的 `paseo` MCP 流。其余一律关闭并记审计日志（`TestRejectUnknownStreamsFromB`、`TestRejectCacheWatchOutsideProject`、`TestOnlyOneCacheWatchMaySubscribePerSession`） |
 | 沙箱 → 宿主机的流 | 只接受 `connect`（出网代理）和 `hostport`（声明过的宿主机端口） |
 | 出网 | 按域名白名单放行；解析后拒绝回环/内网/链路本地/CGNAT 地址；直接按解析出的 IP 连接（无二次解析） |
 | 端口转发 | 只在 `127.0.0.1`/`::1` 上监听；≥1024、非数据库等知名端口、宿主机上空闲才转发 |
@@ -22,6 +22,8 @@
 | SSH | `-T -e none`、`ForwardAgent=no`、`ForwardX11=no`、`ClearAllForwardings=yes`、`PermitLocalCommand=no`、`Tunnel=no` |
 
 路径约束不靠代码：SFTP 服务端和命令执行都在沙箱里，看不到的东西就是不存在。
+
+`fs-watch` 只连接 B 与 A 沙箱内的项目监听器，不提供新的宿主机文件访问能力。可信客户端验证项目路径和订阅数量后，重新构造消息头转发，并写入 `fs-watch` 审计事件；重试订阅也必须经过相同检查。监听或通知不可用时禁用缓存，只有重新建立完整监听和通知握手后才恢复缓存命中。读缓存不绕过写审计，所有修改仍经 A 的原有服务执行。
 
 ## 可选 Paseo 桥接
 

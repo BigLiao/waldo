@@ -32,12 +32,15 @@ func contextGuide(p *config.Policy, host, agent, cwd string, mounts []string) []
 - This version does not hide .git, node_modules or other dependency directories from the file projection. This guide does not grant permissions or enforce policy.
 - Startup references in instruction files are read-only session views. Their original project files are preserved. Project instruction edits made through command tools take effect in the next session.
 `)
-	if p.MetadataCacheTTL > 0 {
+	if p.ContentCacheTTL > 0 {
+		fmt.Fprintf(&b, "- A bounded, session-local SFTP cache is configured on B (content maximum age %s, metadata maximum age %s). It is used only when the proxy and project-change monitoring are working; otherwise reads pass through to A. Writes still go to A. Project filesystem changes invalidate the cache; external edits are observed asynchronously. Command completion waits for invalidation when a cache subscriber is present. Reopen files after changes; an already open handle is not a live view.\n", p.ContentCacheTTL, p.MetadataCacheTTL)
+		fmt.Fprintln(&b, "- Monitoring failure, notification loss or disconnection disables cache hits. Notifications cannot guarantee instant visibility of arbitrary external writes; mmap and remote changes on network filesystems may require bypassing the cache.")
+	} else if p.MetadataCacheTTL > 0 {
 		fmt.Fprintf(&b, "- Project path lookups and file attributes on B use a %s cache. Changes made on A may take this long, plus an in-flight request, to become visible. Directory listings are not cached. Reopen files after external changes; do not assume an already open handle is refreshed.\n", p.MetadataCacheTTL)
 	} else {
 		fmt.Fprintln(&b, "- Project metadata caching is disabled for this session.")
 	}
-	fmt.Fprintln(&b, "- Shared runtime paths, including /tmp and this guide, do not use the project metadata cache. Writes remain synchronous; no additional cross-open content cache is enabled.")
+	fmt.Fprintln(&b, "- Shared runtime paths, including /tmp and this guide, bypass the project cache. Writes remain synchronous.")
 	fmt.Fprintln(&b, "Projected paths:")
 	for _, m := range mounts {
 		fmt.Fprintf(&b, "- %q\n", m)

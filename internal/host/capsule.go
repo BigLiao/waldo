@@ -321,7 +321,14 @@ func (h *host) handleStub(c net.Conn) {
 		st.Close()
 		return
 	}
-	util.Splice(st, c.(*net.UnixConn))
+	h.mu.Lock()
+	hasCache := len(h.cacheWatches) > 0
+	h.mu.Unlock()
+	if hasCache {
+		relayExec(st, c.(*net.UnixConn), h.invalidateCachesBeforeExit)
+	} else {
+		util.Splice(st, c.(*net.UnixConn))
+	}
 }
 
 // runAgent starts the capsule and relays the agent's stdio over the io

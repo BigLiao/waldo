@@ -109,8 +109,12 @@ func serveReconnect(dataDir, token string, window time.Duration) int {
 	}
 	defer ln.Close()
 	defer os.Remove(path)
+	h := &host{dataDir: dataDir}
 	link := reconnect.New(window)
-	link.State = func(up bool) { log.Printf("reconnect attached=%t", up) }
+	link.State = func(up bool) {
+		h.cacheConnectionState(up)
+		log.Printf("reconnect attached=%t", up)
+	}
 	defer link.Close()
 	go func() {
 		for {
@@ -131,7 +135,6 @@ func serveReconnect(dataDir, token string, window time.Duration) int {
 		case <-link.Done():
 		}
 	}()
-	h := &host{dataDir: dataDir}
 	code, err := h.runOn(link, util.ResumableYamuxConfig())
 	h.cleanup()
 	link.Drain()

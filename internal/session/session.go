@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -156,10 +157,12 @@ func Run(o Options) int {
 	// Runtime roots stay uncached even when selected as the entire project.
 	if project == "/tmp" || project == proto.ContextDir {
 		pol.MetadataCacheTTL = 0
+		pol.ContentCacheTTL = 0
 	}
 	for _, shared := range o.Profile.Shared {
 		if filepath.Clean(util.ExpandHome(shared, home)) == project {
 			pol.MetadataCacheTTL = 0
+			pol.ContentCacheTTL = 0
 		}
 	}
 	dataDir := config.DataDir()
@@ -192,7 +195,7 @@ func Run(o Options) int {
 		guide = contextGuide(pol, host, o.Profile.Name, cwd, mounts)
 	}
 
-	al.Log("session", map[string]any{"agent": o.Profile.Name, "project": project, "host": host, "args": paseo.AuditArgs(o.Args), "paseo": o.paseoBroker != nil, "metadata_cache_ttl": pol.MetadataCacheTTL.String()})
+	al.Log("session", map[string]any{"agent": o.Profile.Name, "project": project, "host": host, "args": paseo.AuditArgs(o.Args), "paseo": o.paseoBroker != nil, "metadata_cache_ttl": pol.MetadataCacheTTL.String(), "content_cache_ttl": pol.ContentCacheTTL.String()})
 	snap := sandbox.TakeSnapshot(project)
 
 	state := runState{PID: os.Getpid(), Session: id, Agent: o.Profile.Name, Project: project, Host: host}
@@ -258,6 +261,7 @@ func runRemote(o Options, host string, sb *Sandbox, id, cwd, project string, mou
 		Cwd: cwd, Project: project, Mounts: mounts, Facts: sb.Facts, Interactive: interactive,
 		TimeUnixMs:              time.Now().UnixMilli(),
 		MetadataCacheTTLSeconds: int64(sb.MetadataCacheTTL / time.Second),
+		ContentCacheTTLSeconds:  int64(sb.ContentCacheTTL / time.Second),
 	}
 	if interactive {
 		if c, r, err := term.GetSize(1); err == nil {
@@ -311,10 +315,11 @@ func runRemote(o Options, host string, sb *Sandbox, id, cwd, project string, mou
 	return code
 }
 
-// acceptFromB serves file projection and exec streams. A fixed Paseo broker
+// acceptFromB serves file projection, project-cache watches and exec streams. A fixed Paseo broker
 // is accepted only when explicitly enabled for this session; arbitrary
 // connection requests remain refused and logged.
 func acceptFromB(bs *yamux.Session, sb *Sandbox, al *audit.Logger, brokers ...*paseo.Broker) {
+	var watchActive atomic.Bool
 	for {
 		st, err := bs.AcceptStream()
 		if err != nil {
@@ -330,6 +335,25 @@ func acceptFromB(bs *yamux.Session, sb *Sandbox, al *audit.Logger, brokers ...*p
 				return
 			}
 			switch h.Kind {
+			case proto.KindFSWatch:
+				if sb.ContentCacheTTL <= 0 || h.Path != sb.Project || h.Exec != nil || h.Host != "" || h.Port != 0 {
+					al.Log("reject", map[string]any{"from": "B", "stream": h.Kind})
+					st.Close()
+					return
+				}
+				if !watchActive.CompareAndSwap(false, true) {
+					al.Log("reject", map[string]any{"from": "B", "stream": h.Kind, "reason": "duplicate cache watch"})
+					st.Close()
+					return
+				}
+				defer watchActive.Store(false)
+				in, err := sb.Open(proto.Header{Kind: proto.KindFSWatch, Path: sb.Project})
+				if err != nil {
+					st.Close()
+					return
+				}
+				al.Log("fs-watch", map[string]any{"path": sb.Project})
+				util.Splice(st, in)
 			case proto.KindPaseo:
 				if len(brokers) == 1 && brokers[0] != nil && h.Host == "" && h.Path == "" && h.Port == 0 && h.Exec == nil {
 					al.Log("paseo-mcp", nil)

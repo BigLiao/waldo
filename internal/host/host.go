@@ -39,9 +39,12 @@ type host struct {
 	scrub        map[string]bool
 	idMaps       idMapFiles
 
-	mu       sync.Mutex
-	children []*exec.Cmd
-	mounts   []string
+	mu            sync.Mutex
+	children      []*exec.Cmd
+	mounts        []string
+	cacheWatches  []*cacheWatch
+	cacheStreams  []io.Closer
+	cacheLinkDown bool
 }
 
 // Main is the entry point of `waldo host`.
@@ -202,6 +205,9 @@ func (h *host) prepare() (*exec.Cmd, error) {
 	if h.hello.MetadataCacheTTLSeconds < 0 || h.hello.MetadataCacheTTLSeconds > 60 {
 		return nil, fmt.Errorf("invalid metadata cache TTL: %d seconds", h.hello.MetadataCacheTTLSeconds)
 	}
+	if h.hello.ContentCacheTTLSeconds < 0 || h.hello.ContentCacheTTLSeconds > 60 {
+		return nil, fmt.Errorf("invalid content cache TTL: %d seconds", h.hello.ContentCacheTTLSeconds)
+	}
 	base := h.runtimeBase()
 	if err := os.MkdirAll(base, 0o700); err != nil {
 		return nil, err
@@ -292,39 +298,104 @@ func (h *host) mount(m, dir string) error {
 		return err
 	}
 	if err := proto.WriteMsg(st, proto.Header{Kind: proto.KindFS, Path: m}); err != nil {
+		st.Close()
 		return err
 	}
 	opts := "passive,sshfs_sync,fsname=" + escapeFuseValue("waldo:"+strings.ReplaceAll(m, ",", "_"))
 	args := []string{"-f", "-o", opts}
 	cacheable := projectMetadataCacheable(h.hello.Project, m)
 	ttl := time.Duration(h.hello.MetadataCacheTTLSeconds) * time.Second
-	for _, option := range sshfsCacheOptions(ttl, cacheable) {
+	cacheRequested := cacheable && h.hello.ContentCacheTTLSeconds > 0
+	var mountInput io.Reader = st
+	var mountOutput io.Writer = st
+	var mountStream io.Closer = st
+	var childPipeEnds []io.Closer
+	var watch *cacheWatch
+	if cacheRequested {
+		cache, w, err := h.startProjectCache(m)
+		if err != nil {
+			// A failed watch must not turn into an independently stale kernel
+			// cache. Keep a zero-cache direct connection until a new session.
+			log.Printf("mount %s: content cache unavailable, using direct SFTP: %v", m, err)
+		} else {
+			watch = w
+			stdin, stdout, proxySide, err := cacheProcessPipe()
+			if err != nil {
+				watch.Close()
+				st.Close()
+				return err
+			}
+			childPipeEnds = []io.Closer{stdin, stdout}
+			defer func() {
+				for _, end := range childPipeEnds {
+					end.Close()
+				}
+			}()
+			mountInput, mountOutput = stdin, stdout
+			mountStream = proxySide
+			h.mu.Lock()
+			h.cacheStreams = append(h.cacheStreams, proxySide)
+			h.mu.Unlock()
+			go func() {
+				defer proxySide.Close()
+				defer st.Close()
+				if err := cache.Serve(proxySide, st); err != nil && !errors.Is(err, io.EOF) {
+					log.Printf("mount %s: SFTP cache proxy stopped: %v", m, err)
+				}
+			}()
+		}
+	}
+	cacheOptions := sshfsCacheOptions(ttl, cacheable)
+	if cacheRequested {
+		cacheOptions = sshfsProxyCacheOptions()
+		ttl = 0
+	}
+	for _, option := range cacheOptions {
 		args = append(args, "-o", option)
 	}
 	if !cacheable {
 		ttl = 0
 	}
-	log.Printf("mount %s: metadata_cache_ttl=%s", m, ttl)
+	contentTTL := int64(0)
+	if watch != nil {
+		contentTTL = h.hello.ContentCacheTTLSeconds
+	}
+	log.Printf("mount %s: kernel_metadata_cache_ttl=%s content_cache_ttl=%ds", m, ttl, contentTTL)
 	for _, option := range h.idMaps.options() {
 		args = append(args, "-o", option)
 	}
 	args = append(args, ":"+m, dir)
 	cmd := exec.Command("sshfs", args...)
-	cmd.Stdin = st
-	cmd.Stdout = st
+	cmd.Stdin = mountInput
+	cmd.Stdout = mountOutput
 	var stderr strings.Builder
 	cmd.Stderr = &limitedWriter{w: &stderr, n: 4096}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGTERM}
 	if err := cmd.Start(); err != nil {
+		mountStream.Close()
 		st.Close()
+		if watch != nil {
+			watch.Close()
+		}
 		return fmt.Errorf("启动 sshfs 失败（B 上需要安装 sshfs）: %w", err)
+	}
+	for _, end := range childPipeEnds {
+		end.Close()
 	}
 	h.mu.Lock()
 	h.children = append(h.children, cmd)
 	h.mounts = append(h.mounts, dir)
 	h.mu.Unlock()
 	exited := make(chan struct{})
-	go func() { cmd.Wait(); st.Close(); close(exited) }()
+	go func() {
+		cmd.Wait()
+		mountStream.Close()
+		st.Close()
+		if watch != nil {
+			watch.Close()
+		}
+		close(exited)
+	}()
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		if isMounted(dir) {
@@ -409,6 +480,16 @@ func (h *host) makeStubs() (map[string]string, error) {
 func (h *host) cleanup() {
 	if h.paseoGateway != nil {
 		h.paseoGateway.Close()
+	}
+	h.mu.Lock()
+	watches, streams := h.cacheWatches, h.cacheStreams
+	h.cacheWatches, h.cacheStreams = nil, nil
+	h.mu.Unlock()
+	for _, w := range watches {
+		w.Close()
+	}
+	for _, stream := range streams {
+		stream.Close()
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()

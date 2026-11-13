@@ -1,5 +1,17 @@
 # waldo 交接文档
 
+> 2026-11-13 更新：新增项目 SFTP 读缓存代理与 `fs-watch` 主动失效通道，默认 `content_cache_ttl = "10s"`。写请求保留原有 A 端服务，命令结束等待本会话失效确认；本机普通文件修改由递归 inotify 异步推送。新增实现位于 `internal/fscache`、`internal/fswatch`、`internal/serve/cache.go` 和 `internal/host/cache_proxy.go`。代理模式关闭 SSHFS 独立缓存；目录列表仍直通。下文关于“只有内核元数据缓存、尚无主动失效”的描述为旧实现记录。当前环境无 `/dev/fuse`，完整挂载回归仍需在有 FUSE 的机器上运行，协议和通知链路由真实 SFTP 的内存管道集成测试覆盖。配置及限制见 [configuration.md](configuration.md#文件投射性能)。
+
+## 当前会话精简摘要（2026-11-13）
+
+- 任务已完成：SFTP 读缓存、主动失效及三轮选择性代码审查修复；保留原生 Agent 工具，写操作仍由 A 的原有服务执行。
+- B 的代理只缓存完整普通文件：实际 EOF 或同一 fd 的末尾 FSTAT 确认后发布；精确长度冷读可能在 CLOSE 时多一次确认往返。内容预算 30 MiB，元数据 2 MiB，单文件 1 MiB，最多保留 256 个只读 fd；目录列表直通。TTL 不滑动，代次防止在途旧数据回填。
+- A 递归 inotify 通知全项目失效，故障期间禁缓存，按 1–30 秒退避重建；B 通知断流后按 100ms–5 秒退避重订阅，旧订阅不能影响新订阅。持续推进的落后 ACK 也续活跃时间，重复旧 ACK 不续期。
+- 正常命令完成等待失效 ACK；单次屏障最多 3 秒，异常订阅异步关闭。B 的 `host/exec_cache.go` 在 FExit 交给 stub 前同步失效，保证超时及迟到通知下的写后读；无缓存会话沿用原字节转发。
+- 默认两个 TTL 都为 10 秒。旧配置若有效 `metadata_cache_ttl = "0s"` 且没有显式内容 TTL，内容缓存保持关闭；显式内容 TTL 优先。`fs-watch` 只允许当前项目单订阅，重构消息头并记录审计。
+- 验证通过：`go test -race -p 1 ./internal/...`、`go vet -p 1 ./...`、构建及 diff 检查；测试需允许本机 socket，缓存可放 `/tmp/waldo-go-cache`。仓库内 `./waldo` 已重新构建，不安装或推送到其他位置。
+- 未验证：真实双机/FUSE 挂载与整体 Agent 提速（本环境没有 `/dev/fuse`）。暂保留 `direct_io`、每次命令结束及文件变化的全项目失效；默认开关、精确失效、目录排除、预取与 mmap/大文件性能等待实测。inotify 无法覆盖任意 mmap/网络文件系统/链接别名更新；不可完整监听时回源重试，不能静默跳过后继续缓存。
+
 > 状态截至 2026-11-11。设计依据是仓库根目录的 [DESIGN.md](../DESIGN.md)，用法见 [README.md](../README.md)，构建、测试与实现细节见 [DEVELOPMENT.md](DEVELOPMENT.md)，安全模型见 [SECURITY.md](SECURITY.md)，profile 格式见 [profiles.md](profiles.md)。本文只讲接手需要知道的事：现在到哪了、怎么跑、代码怎么读、哪里有坑、下一步做什么。
 
 ## 1. 一句话现状

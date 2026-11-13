@@ -49,7 +49,7 @@ func fail(st io.WriteCloser, fw *proto.FrameWriter, code int, format string, a .
 // A stream that closes before the process exits means the stub on B died or
 // the connection dropped: the whole process group is killed. After a normal
 // exit, background processes keep running (until the session ends).
-func runExec(st io.ReadWriteCloser, req *proto.ExecReq, execEnv []string) {
+func runExec(st io.ReadWriteCloser, req *proto.ExecReq, execEnv []string, beforeExit func()) {
 	fw := proto.NewFrameWriter(st)
 	if len(req.Argv) == 0 || req.Path == "" || !strings.HasPrefix(req.Path, "/") {
 		fail(st, fw, 126, "invalid exec request")
@@ -181,6 +181,11 @@ func runExec(st io.ReadWriteCloser, req *proto.ExecReq, execEnv []string) {
 		} else {
 			ex.Code = 126
 		}
+	}
+	// Different yamux streams have no application-level ordering. Finish cache
+	// invalidation before the agent can observe this command's exit status.
+	if beforeExit != nil {
+		beforeExit()
 	}
 	fw.WriteJSON(proto.FExit, ex)
 	st.Close()

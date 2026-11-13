@@ -76,6 +76,11 @@ func main() {
 			fmt.Fprintln(os.Stderr, "metadata probe:", err)
 			os.Exit(1)
 		}
+	case "cache":
+		if err := cacheProbe(); err != nil {
+			fmt.Fprintln(os.Stderr, "cache probe:", err)
+			os.Exit(1)
+		}
 	case "tty":
 		tty()
 	case "adopt":
