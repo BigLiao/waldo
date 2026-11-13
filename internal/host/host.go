@@ -31,13 +31,15 @@ import (
 )
 
 type host struct {
-	paseoGateway *paseo.Gateway
-	dataDir      string
-	runDir       string
-	sess         *yamux.Session
-	hello        proto.Hello
-	scrub        map[string]bool
-	idMaps       idMapFiles
+	modelObservation *modelObservation
+	observeEnv       []string
+	paseoGateway     *paseo.Gateway
+	dataDir          string
+	runDir           string
+	sess             *yamux.Session
+	hello            proto.Hello
+	scrub            map[string]bool
+	idMaps           idMapFiles
 
 	mu            sync.Mutex
 	children      []*exec.Cmd
@@ -182,6 +184,7 @@ func (h *host) runOn(rw io.ReadWriteCloser, cfg *yamux.Config) (int, error) {
 		return 1, fmt.Errorf("expected io stream")
 	}
 	code := h.runAgent(cmd, io)
+	h.stopModelObservation()
 	log.Printf("agent exited with %d", code)
 	return code, nil
 }
@@ -270,6 +273,7 @@ func (h *host) prepare() (*exec.Cmd, error) {
 			return nil, err
 		}
 	}
+	h.startModelObservation()
 	agent, err := resolveAgent(h.hello.Profile.Bin)
 	if err != nil {
 		return nil, err
@@ -478,6 +482,7 @@ func (h *host) makeStubs() (map[string]string, error) {
 
 // cleanup terminates children, unmounts and removes the run directory.
 func (h *host) cleanup() {
+	h.stopModelObservation()
 	if h.paseoGateway != nil {
 		h.paseoGateway.Close()
 	}

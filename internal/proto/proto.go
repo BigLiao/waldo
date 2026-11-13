@@ -76,6 +76,7 @@ const (
 	KindHostPort = "hostport" // A sandbox -> A client: connection to a host service
 	KindDial     = "dial"     // A client -> A sandbox: forwarded localhost port
 	KindPaseo    = "paseo"    // B host -> A client: fixed, session-scoped Paseo MCP HTTP exchange
+	KindObserve  = "observe"  // B host -> A client: bounded model-call counters, opt-in
 )
 
 type Header struct {
@@ -154,17 +155,19 @@ type PortEvent struct {
 
 // Profile is the agent profile as sent to B.
 type Profile struct {
-	Name   string            `json:"name"`
-	Bin    string            `json:"bin"`
-	Args   []string          `json:"args"`
-	Env    map[string]string `json:"env"`
-	Shared []string          `json:"shared"`
-	Scrub  []string          `json:"scrub"`
-	State  []string          `json:"state"`
+	Telemetry string            `json:"telemetry,omitempty"`
+	Name      string            `json:"name"`
+	Bin       string            `json:"bin"`
+	Args      []string          `json:"args"`
+	Env       map[string]string `json:"env"`
+	Shared    []string          `json:"shared"`
+	Scrub     []string          `json:"scrub"`
+	State     []string          `json:"state"`
 }
 
 // Hello is the session description A sends to B.
 type Hello struct {
+	Observe                 bool     `json:"observe,omitempty"`
 	Paseo                   bool     `json:"paseo,omitempty"`
 	ReadOnlyMounts          []string `json:"read_only_mounts,omitempty"`
 	Version                 string   `json:"version"`

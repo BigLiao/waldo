@@ -2,6 +2,7 @@
 # ~/.config/waldo/config.toml with the same [agent.<name>] tables.
 
 [agent.claude]
+telemetry = "claude"
 bin    = "claude"
 mcp_config_flag = "--mcp-config"
 skill_dir = "~/.claude/skills"
@@ -12,6 +13,7 @@ needs  = ["rg", "git", "bash"]
 state  = ["~/.claude", "~/.claude.json"]
 
 [agent.codex]
+telemetry = "codex"
 bin    = "codex"
 args   = ["--sandbox", "danger-full-access"]
 scrub  = ["OPENAI_API_KEY", "CODEX_API_KEY"]

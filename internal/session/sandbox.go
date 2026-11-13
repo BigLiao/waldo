@@ -29,6 +29,8 @@ const ProxyPort = 39339
 
 // Sandbox is a running A-side sandbox.
 type Sandbox struct {
+	Observe          bool
+	ModelTelemetry   string
 	Facts            proto.Facts
 	Project          string
 	Policy           *netpolicy.Policy

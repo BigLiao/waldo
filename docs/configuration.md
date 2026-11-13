@@ -81,6 +81,27 @@ env = { CLAUDE_CODE_MAX_OUTPUT_TOKENS = "16000" }
 
 `waldo allow` 写的是 `~/.config/waldo/allowed.json`，与 `config.toml` 合并。
 
+## 轻量运行日志
+
+无需额外服务，仍使用本机的 `audit.log` 和原有查看命令：
+
+```sh
+waldo claude --observe     # 或 waldo codex --observe；仅模型统计需要此参数
+waldo log -f               # 在另一个终端查看；-s <会话ID> 筛选单次会话
+```
+
+| 日志类型 | 内容与耗时范围 |
+|---|---|
+| `exec` / `exec-end` | 关联 ID、程序名、退出状态、耗时；从 A 可信客户端收到命令请求，到观察到退出结果，包含沙箱执行、输出收尾和缓存失效屏障，不是纯程序运行时间，也不包含完整的 B 端工具调用时间 |
+| `file-read` / `file-write` | 每 5 秒汇总已完成的 SFTP 读写请求次数和累计耗时，流结束时补一次汇总；包含 OPEN 和属性、目录等请求，次数不等于文件数，失败回复也算完成；`scope=sftp_rpc` |
+| `model-call` | `--observe` 开启后，原生客户端报告的模型请求次数、错误数和累计 `duration_ms`；Codex 的流事件处理时间另列 `stream_event_ms`，不能将它或 HTTP 请求耗时当作完整生成时长 |
+
+文件统计位于 A 的转发边界，只覆盖实际到达 A 的 RPC；B 的缓存命中，以及 A 上 shell 子进程直接进行的本地文件访问不在其中。各项耗时可重叠，尤其多个文件请求并发时，累计值可能超过会话时长；不能将这些值直接相加或当作会话占比。未观测到操作的时间不标记为“模型思考”。断流的命令记为 `disconnected`，没有退出帧时不推测退出码；未完成或超出统计容量的文件请求另记 `file-stats-dropped`。
+
+模型统计复用 [Claude Code](https://code.claude.com/docs/en/monitoring-usage) 和 [Codex](https://learn.chatgpt.com/docs/config-file/config-advanced) 自带的异步 OpenTelemetry 日志，B 上临时启动仅监听回环地址、使用随机会话路径的 JSON 接收器，只提取固定数值字段，再复用现有 SSH 连接批量传到 A。不代理模型 API、不增加模型请求、不注入 MCP，也不修改持久配置。`--observe` 会为本次进程配置本地日志 exporter；需要保留原有日志 exporter 时不要开启。模型输入、响应和工具内容不写入新增统计日志；原有命令与写操作审计保持原样。
+
+默认不开启客户端原生遥测；命令和文件统计始终保留。遥测导出、转发是尽力而为的，断线、接收器不可用或 Agent 版本不支持相关事件时可能缺少模型统计，不会回退为估算模型时间，也不会阻止命令和文件操作。自定义 Agent 可配置 `telemetry` 适配器，见 [profiles.md](profiles.md)。普通遥测事件经过批处理，日志出现时间会晚于实际操作；本实现没有逐请求文件明细、全量进程跟踪或模型调用的关键路径分析。
+
 ## 文件投射性能
 
 项目默认使用 B 上的会话内 SFTP 缓存代理。完整读取过的小文件可在后续打开时直接由 B 应答，写入、截断、删除、重命名和其他修改仍转发到 A 的原有 SFTP 服务。缓存使用会话内存：内容预算 30 MiB、元数据预算 2 MiB，单文件最多 1 MiB，最多为缓存保留 256 个只读句柄；特殊文件和目录列表直通。它不是完整工作区镜像，也不跨会话持久保存。`content_cache_ttl` 默认 `10s`，是内容缓存的最大年龄，不会因反复读取而延长。缓存只有在实际 EOF 或同一文件句柄上的 FSTAT 确认完整性后才发布；关闭文件时仍没有 EOF、需要确认已捕获的内容是否完整时，首次关闭可能增加一次 FSTAT 确认往返。

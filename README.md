@@ -120,6 +120,7 @@ waldo link claude
 | `waldo allow <域名>` | 允许当前项目访问某个域名，加 `--global` 对所有项目生效 |
 | `waldo ports` | 查看 Agent 启动的服务转发到了本机哪些端口 |
 | `waldo log` | 回看 Agent 执行过的命令、改过的文件、访问过的网络 |
+| `waldo <agent> --observe` | 在命令和文件日志之外，追加模型调用的轻量统计（Claude / Codex） |
 | `waldo link <agent>` | 让 `claude` 等命令直接走 waldo |
 
 ## 按需调整
@@ -133,6 +134,8 @@ waldo allow api.example.com
 如果 Agent 启动的开发服务器（比如 `localhost:3000`）需要在本机浏览器里打开，waldo 默认会自动转发，用 `waldo ports` 就能看到。
 
 更细的设置，例如传入额外的环境变量、让沙箱访问本机数据库、为不同项目分别配置，都写在 `~/.config/waldo/config.toml` 里，详见 [配置参考](docs/configuration.md)。
+
+排查卡顿时，在另一个终端运行 `waldo log -f`：`exec-end` 显示命令耗时和退出状态，`file-read` / `file-write` 每 5 秒汇总一次文件 RPC。需要模型请求统计时，以 `waldo claude --observe` 或 `waldo codex --observe` 启动，额外查看 `model-call`。统计不保存文件内容或命令输出，也不把无活动时间当作模型调用；各项耗时的范围见[轻量运行日志](docs/configuration.md#轻量运行日志)。
 
 ## 安全一览
 

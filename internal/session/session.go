@@ -32,6 +32,7 @@ import (
 
 // Options for one agent session.
 type Options struct {
+	Observe        bool
 	Paseo          bool
 	paseoBroker    *paseo.Broker
 	readOnlyMounts []string
@@ -195,7 +196,7 @@ func Run(o Options) int {
 		guide = contextGuide(pol, host, o.Profile.Name, cwd, mounts)
 	}
 
-	al.Log("session", map[string]any{"agent": o.Profile.Name, "project": project, "host": host, "args": paseo.AuditArgs(o.Args), "paseo": o.paseoBroker != nil, "metadata_cache_ttl": pol.MetadataCacheTTL.String(), "content_cache_ttl": pol.ContentCacheTTL.String()})
+	al.Log("session", map[string]any{"agent": o.Profile.Name, "project": project, "host": host, "args": paseo.AuditArgs(o.Args), "paseo": o.paseoBroker != nil, "observe": o.Observe, "metadata_cache_ttl": pol.MetadataCacheTTL.String(), "content_cache_ttl": pol.ContentCacheTTL.String()})
 	snap := sandbox.TakeSnapshot(project)
 
 	state := runState{PID: os.Getpid(), Session: id, Agent: o.Profile.Name, Project: project, Host: host}
@@ -218,6 +219,8 @@ func Run(o Options) int {
 		return 1
 	}
 	defer sb.Close()
+	sb.Observe = o.Observe
+	sb.ModelTelemetry = o.Profile.Telemetry
 
 	code := runRemote(o, host, sb, id, cwd, project, mounts, al)
 
@@ -251,12 +254,25 @@ func runRemote(o Options, host string, sb *Sandbox, id, cwd, project string, mou
 		warnf("%v", err)
 		return 255
 	}
-	defer bs.Close()
-	go acceptFromB(bs, sb, al, o.paseoBroker)
+	acceptDone := make(chan struct{})
+	go func() {
+		defer close(acceptDone)
+		acceptFromB(bs, sb, al, o.paseoBroker)
+	}()
+	defer func() {
+		bs.Close()
+		// Closing the link wakes the observers. Let final command/file/model
+		// summaries reach the log before Run closes it; never wait on a peer.
+		select {
+		case <-acceptDone:
+		case <-time.After(100 * time.Millisecond):
+		}
+	}()
 
 	interactive := term.IsTerminal(0) && term.IsTerminal(1)
 	hello := proto.Hello{
-		Paseo: o.paseoBroker != nil, ReadOnlyMounts: o.readOnlyMounts,
+		Observe: o.Observe,
+		Paseo:   o.paseoBroker != nil, ReadOnlyMounts: o.readOnlyMounts,
 		Version: proto.FullVersion(), Session: id, Profile: o.Profile.Wire(), Argv: o.Args,
 		Cwd: cwd, Project: project, Mounts: mounts, Facts: sb.Facts, Interactive: interactive,
 		TimeUnixMs:              time.Now().UnixMilli(),
@@ -319,13 +335,19 @@ func runRemote(o Options, host string, sb *Sandbox, id, cwd, project string, mou
 // is accepted only when explicitly enabled for this session; arbitrary
 // connection requests remain refused and logged.
 func acceptFromB(bs *yamux.Session, sb *Sandbox, al *audit.Logger, brokers ...*paseo.Broker) {
+	var handlers sync.WaitGroup
+	defer handlers.Wait()
 	var watchActive atomic.Bool
+	var observeActive atomic.Bool
+	var execSeq atomic.Uint64
 	for {
 		st, err := bs.AcceptStream()
 		if err != nil {
 			return
 		}
+		handlers.Add(1)
 		go func() {
+			defer handlers.Done()
 			st.SetReadDeadline(time.Now().Add(150 * time.Second))
 			var h proto.Header
 			err := proto.ReadMsg(st, &h)
@@ -335,6 +357,14 @@ func acceptFromB(bs *yamux.Session, sb *Sandbox, al *audit.Logger, brokers ...*p
 				return
 			}
 			switch h.Kind {
+			case proto.KindObserve:
+				if !sb.Observe || h.Path != "" || h.Host != "" || h.Port != 0 || h.Exec != nil || !observeActive.CompareAndSwap(false, true) {
+					al.Log("reject", map[string]any{"from": "B", "stream": h.Kind})
+					st.Close()
+					return
+				}
+				defer observeActive.Store(false)
+				serveModelStats(st, al, sb.ModelTelemetry)
 			case proto.KindFSWatch:
 				if sb.ContentCacheTTL <= 0 || h.Path != sb.Project || h.Exec != nil || h.Host != "" || h.Port != 0 {
 					al.Log("reject", map[string]any{"from": "B", "stream": h.Kind})
@@ -380,34 +410,27 @@ func acceptFromB(bs *yamux.Session, sb *Sandbox, al *audit.Logger, brokers ...*p
 					}
 					al.Log(op, f)
 				})
-				spliceTee(st, in, sniff)
+				spliceObservedFS(st, in, sniff, al)
 			case proto.KindExec:
 				if h.Exec == nil {
 					st.Close()
 					return
 				}
-				al.Log("exec", map[string]any{"argv": h.Exec.Argv, "path": h.Exec.Path, "cwd": h.Exec.Cwd})
+				id, start := execSeq.Add(1), time.Now()
+				al.Log("exec", map[string]any{"id": id, "argv": h.Exec.Argv, "path": h.Exec.Path, "cwd": h.Exec.Cwd})
 				in, err := sb.Open(proto.Header{Kind: proto.KindExec, Exec: h.Exec})
 				if err != nil {
+					logExecEnd(al, id, h.Exec.Path, start, time.Now(), "start_failed", nil)
 					st.Close()
 					return
 				}
-				util.Splice(st, in)
+				spliceExec(st, in, al, id, h.Exec.Path, start)
 			default:
 				al.Log("reject", map[string]any{"from": "B", "stream": h.Kind})
 				st.Close()
 			}
 		}()
 	}
-}
-
-// spliceTee is Splice with the B->A direction also fed to w.
-func spliceTee(b, a io.ReadWriteCloser, w io.Writer) {
-	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() { defer wg.Done(); io.Copy(a, io.TeeReader(b, w)); a.Close() }()
-	go func() { defer wg.Done(); io.Copy(b, a); b.Close() }()
-	wg.Wait()
 }
 
 // relayAgentIO connects the user's terminal (or pipes) to the agent on B.

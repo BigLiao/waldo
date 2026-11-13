@@ -276,6 +276,15 @@ func (h *host) agentEnv() []string {
 			env = util.EnvSet(env, k, v)
 		}
 	}
+	if h.modelObservation != nil {
+		env = util.EnvFilter(env, func(k string) bool {
+			return k == "OTEL_LOG_RAW_API_BODIES" || k == "BETA_TRACING_ENDPOINT" || k == "ENABLE_BETA_TRACING_DETAILED"
+		})
+	}
+	for _, e := range h.observeEnv {
+		k, v, _ := strings.Cut(e, "=")
+		env = util.EnvSet(env, k, v)
+	}
 	cwd := hl.Cwd
 	if cwd == "" {
 		cwd = hl.Project
@@ -429,6 +438,9 @@ func (h *host) runAgent(cmd *exec.Cmd, st io.ReadWriteCloser) int {
 			ex.Code = 1
 		}
 	}
+	// The final telemetry batch must enter the transport before A sees the
+	// agent's exit and closes the session. This is bounded and opt-in only.
+	h.stopModelObservation()
 	fw.WriteJSON(proto.FExit, ex)
 	st.Close()
 	if master != nil {
