@@ -17,14 +17,16 @@ var builtin string
 
 // Profile describes how to run one agent.
 type Profile struct {
-	Name   string            `toml:"-"`
-	Bin    string            `toml:"bin"`
-	Args   []string          `toml:"args"`
-	Env    map[string]string `toml:"env"`
-	Shared []string          `toml:"shared"` // written by the agent, read by commands -> projected to A
-	Scrub  []string          `toml:"scrub"`  // never forwarded with commands to A
-	Needs  []string          `toml:"needs"`  // commands doctor checks on A
-	State  []string          `toml:"state"`  // agent state under HOME on B (login check, --adopt-login)
+	Name          string            `toml:"-"`
+	Bin           string            `toml:"bin"`
+	Args          []string          `toml:"args"`
+	Env           map[string]string `toml:"env"`
+	Shared        []string          `toml:"shared"`          // written by the agent, read by commands -> projected to A
+	Scrub         []string          `toml:"scrub"`           // never forwarded with commands to A
+	Needs         []string          `toml:"needs"`           // commands doctor checks on A
+	State         []string          `toml:"state"`           // agent state under HOME on B (login check, --adopt-login)
+	MCPConfigFlag string            `toml:"mcp_config_flag"` // inline JSON MCP configuration argument
+	SkillDir      string            `toml:"skill_dir"`       // native skill directory, home-relative
 }
 
 type file struct {
@@ -72,6 +74,12 @@ func Merge(user map[string]Profile) map[string]Profile {
 		}
 		if u.State != nil {
 			b.State = u.State
+		}
+		if u.MCPConfigFlag != "" {
+			b.MCPConfigFlag = u.MCPConfigFlag
+		}
+		if u.SkillDir != "" {
+			b.SkillDir = u.SkillDir
 		}
 		if u.Env != nil {
 			if b.Env == nil {

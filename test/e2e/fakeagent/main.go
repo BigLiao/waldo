@@ -44,6 +44,11 @@ func main() {
 		os.Exit(2)
 	}
 	switch os.Args[1] {
+	case "paseo":
+		if err := paseoProbe(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
 	case "probe":
 		probe()
 	case "reconnect":

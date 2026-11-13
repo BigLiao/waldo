@@ -216,7 +216,14 @@ func (h *host) capsuleArgs(agentHome string, mnts []string, stubs map[string]str
 		}
 	}
 	for i, m := range hl.Mounts {
-		binds = append(binds, bind{mnts[i], m, false})
+		ro := false
+		for _, p := range hl.ReadOnlyMounts {
+			if m == p {
+				ro = true
+				break
+			}
+		}
+		binds = append(binds, bind{mnts[i], m, ro})
 	}
 	for dst, src := range stubs {
 		binds = append(binds, bind{src, dst, true})

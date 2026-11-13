@@ -3,6 +3,8 @@
 
 [agent.claude]
 bin    = "claude"
+mcp_config_flag = "--mcp-config"
+skill_dir = "~/.claude/skills"
 env    = { USE_BUILTIN_RIPGREP = "0", DISABLE_AUTOUPDATER = "1" }
 shared = ["~/.claude/shell-snapshots"]
 scrub  = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"]

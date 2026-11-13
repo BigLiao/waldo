@@ -30,7 +30,7 @@ const usage = `waldo — Agent 跑在你的服务器上，它的"手"落在这�
 用法:
   waldo setup <user@host> [--adopt-login=false] [--skip-deps]
                                              默认复用 B 的配置和登录，自动补齐依赖并检查
-  waldo <agent> [参数...]                     运行 Agent（内置: %s）
+  waldo <agent> [--paseo] [参数...]           运行 Agent（内置: %s）；--paseo 桥接 Paseo MCP 和 skills
   waldo run [--] <命令> [参数...]             用空 profile 运行任意 CLI Agent
   waldo doctor                                检查两端依赖、时钟偏差、Agent 安装/登录
   waldo allow [--global] <域名>               给当前项目放行一个出网域名
@@ -53,6 +53,7 @@ func loadConfig() (*config.Config, int) {
 
 // Main dispatches A-side commands. args excludes the program name.
 func Main(args []string) int {
+	args, withPaseo := paseoPrefix(args)
 	cfg, code := loadConfig()
 	if cfg == nil {
 		return code
@@ -61,6 +62,12 @@ func Main(args []string) int {
 	if len(args) == 0 {
 		fmt.Fprintf(os.Stderr, usage, strings.Join(profile.Names(profiles), ", "), config.Path())
 		return 2
+	}
+	if withPaseo {
+		if _, ok := profiles[args[0]]; !ok {
+			fmt.Fprintln(os.Stderr, "waldo: --paseo 只用于已配置的 Agent")
+			return 2
+		}
 	}
 	switch args[0] {
 	case "-h", "--help", "help":
@@ -99,10 +106,22 @@ func Main(args []string) int {
 		return session.Run(session.Options{Config: cfg, Profile: profile.Empty(a[0]), Args: a[1:]})
 	}
 	if p, ok := profiles[args[0]]; ok {
-		return session.Run(session.Options{Config: cfg, Profile: p, Args: args[1:]})
+		agentArgs, enabled := paseoPrefix(args[1:])
+		return session.Run(session.Options{Config: cfg, Profile: p, Args: agentArgs, Paseo: withPaseo || enabled})
 	}
 	fmt.Fprintf(os.Stderr, "waldo: 未知命令或 Agent %q（waldo help 查看用法；任意命令请用 waldo run -- %s）\n", args[0], args[0])
 	return 2
+}
+
+// Only consume a wrapper flag before agent arguments. A literal --paseo
+// supplied after -p or -- remains an agent prompt, rather than being removed.
+func paseoPrefix(args []string) ([]string, bool) {
+	enabled := false
+	for len(args) > 0 && args[0] == "--paseo" {
+		enabled = true
+		args = args[1:]
+	}
+	return args, enabled
 }
 
 func setup(cfg *config.Config, args []string) int {

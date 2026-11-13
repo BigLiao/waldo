@@ -20,6 +20,7 @@ import (
 
 	"waldo/internal/audit"
 	"waldo/internal/config"
+	"waldo/internal/paseo"
 	"waldo/internal/profile"
 	"waldo/internal/proto"
 	"waldo/internal/sandbox"
@@ -30,10 +31,13 @@ import (
 
 // Options for one agent session.
 type Options struct {
-	Config  *config.Config
-	Profile profile.Profile
-	Args    []string
-	Host    string // overrides Config.Host
+	Paseo          bool
+	paseoBroker    *paseo.Broker
+	readOnlyMounts []string
+	Config         *config.Config
+	Profile        profile.Profile
+	Args           []string
+	Host           string // overrides Config.Host
 }
 
 func warnf(format string, a ...any) { fmt.Fprintf(os.Stderr, "waldo: "+format+"\n", a...) }
@@ -105,6 +109,35 @@ func Run(o Options) int {
 		warnf("%v", err)
 		return 1
 	}
+	var skillMounts []sandbox.ReadOnlyMount
+	if o.Paseo {
+		if o.Profile.MCPConfigFlag != "--mcp-config" || o.Profile.SkillDir == "" {
+			warnf("此 Agent 尚未配置 Paseo MCP / skills 注入")
+			return 2
+		}
+		// Discovery commands never open an interactive agent and have no
+		// caller identity. Keep provider version/auth diagnostics operational.
+		probe := len(o.Args) > 0 && (o.Args[0] == "--version" || o.Args[0] == "-v" || o.Args[0] == "version" || (o.Args[0] == "auth" && len(o.Args) > 1 && o.Args[1] == "status"))
+		if !probe {
+			var endpoint *paseo.Endpoint
+			o.Args, endpoint, err = paseo.Configs(o.Args)
+			if err != nil {
+				warnf("%v", err)
+				return 2
+			}
+			o.paseoBroker = paseo.NewBroker(endpoint)
+			defer o.paseoBroker.Close()
+			skills, err := paseo.Skills(home, util.ExpandHome(o.Profile.SkillDir, home))
+			if err != nil {
+				warnf("Paseo skills: %v", err)
+				return 2
+			}
+			for _, skill := range skills {
+				skillMounts = append(skillMounts, sandbox.ReadOnlyMount{Source: skill.Source, Target: skill.Target})
+				o.readOnlyMounts = append(o.readOnlyMounts, skill.Target)
+			}
+		}
+	}
 	cwd, err := os.Getwd()
 	if err != nil {
 		warnf("%v", err)
@@ -144,6 +177,7 @@ func Run(o Options) int {
 		mounts = append(mounts, "/tmp")
 	}
 	var mkdirs []string
+	mounts = append(mounts, o.readOnlyMounts...)
 	for _, s := range o.Profile.Shared {
 		p := filepath.Clean(util.ExpandHome(s, home))
 		if !filepath.IsAbs(p) || util.Within(p, project) || util.Within(p, "/tmp") {
@@ -158,7 +192,7 @@ func Run(o Options) int {
 		guide = contextGuide(pol, host, o.Profile.Name, cwd, mounts)
 	}
 
-	al.Log("session", map[string]any{"agent": o.Profile.Name, "project": project, "host": host, "args": o.Args, "metadata_cache_ttl": pol.MetadataCacheTTL.String()})
+	al.Log("session", map[string]any{"agent": o.Profile.Name, "project": project, "host": host, "args": paseo.AuditArgs(o.Args), "paseo": o.paseoBroker != nil, "metadata_cache_ttl": pol.MetadataCacheTTL.String()})
 	snap := sandbox.TakeSnapshot(project)
 
 	state := runState{PID: os.Getpid(), Session: id, Agent: o.Profile.Name, Project: project, Host: host}
@@ -175,7 +209,7 @@ func Run(o Options) int {
 	writeState(nil)
 	defer os.Remove(statePath)
 
-	sb, err := StartSandbox(SandboxOptions{Home: home, Project: project, Policy: pol, Audit: al, DataDir: dataDir, Mkdirs: mkdirs, OnPorts: writeState, ContextGuide: guide})
+	sb, err := StartSandbox(SandboxOptions{Home: home, Project: project, Policy: pol, Audit: al, DataDir: dataDir, Mkdirs: mkdirs, OnPorts: writeState, ContextGuide: guide, ReadOnlyMounts: skillMounts})
 	if err != nil {
 		warnf("%v", err)
 		return 1
@@ -215,10 +249,11 @@ func runRemote(o Options, host string, sb *Sandbox, id, cwd, project string, mou
 		return 255
 	}
 	defer bs.Close()
-	go acceptFromB(bs, sb, al)
+	go acceptFromB(bs, sb, al, o.paseoBroker)
 
 	interactive := term.IsTerminal(0) && term.IsTerminal(1)
 	hello := proto.Hello{
+		Paseo: o.paseoBroker != nil, ReadOnlyMounts: o.readOnlyMounts,
 		Version: proto.FullVersion(), Session: id, Profile: o.Profile.Wire(), Argv: o.Args,
 		Cwd: cwd, Project: project, Mounts: mounts, Facts: sb.Facts, Interactive: interactive,
 		TimeUnixMs:              time.Now().UnixMilli(),
@@ -276,9 +311,10 @@ func runRemote(o Options, host string, sb *Sandbox, id, cwd, project string, mou
 	return code
 }
 
-// acceptFromB serves the streams B opens: only file projection and exec
-// forwarding are accepted; anything else is refused and logged.
-func acceptFromB(bs *yamux.Session, sb *Sandbox, al *audit.Logger) {
+// acceptFromB serves file projection and exec streams. A fixed Paseo broker
+// is accepted only when explicitly enabled for this session; arbitrary
+// connection requests remain refused and logged.
+func acceptFromB(bs *yamux.Session, sb *Sandbox, al *audit.Logger, brokers ...*paseo.Broker) {
 	for {
 		st, err := bs.AcceptStream()
 		if err != nil {
@@ -294,6 +330,14 @@ func acceptFromB(bs *yamux.Session, sb *Sandbox, al *audit.Logger) {
 				return
 			}
 			switch h.Kind {
+			case proto.KindPaseo:
+				if len(brokers) == 1 && brokers[0] != nil && h.Host == "" && h.Path == "" && h.Port == 0 && h.Exec == nil {
+					al.Log("paseo-mcp", nil)
+					brokers[0].Serve(st)
+				} else {
+					al.Log("reject", map[string]any{"from": "B", "stream": h.Kind})
+					st.Close()
+				}
 			case proto.KindFS:
 				if !filepath.IsAbs(h.Path) {
 					st.Close()

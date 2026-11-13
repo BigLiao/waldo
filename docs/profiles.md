@@ -11,6 +11,8 @@
 | `scrub` | 凭证类变量：保留在 B 上的 Agent 环境里，但绝不随命令带到 A |
 | `needs` | `waldo doctor` 在 A 上检查的命令 |
 | `state` | Agent 在 B 上的状态路径（`~/` 开头）：doctor 据此判断是否已登录；`waldo setup` 默认把其中已存在的**目录**绑定进胶囊（与 B 上原生 Agent 共用），**文件**首次复制到胶囊 HOME，已有非空副本保留（单文件绑定会让 rename 覆盖失败） |
+| `mcp_config_flag` | `--paseo` 使用的 MCP 配置参数；目前支持 Claude 风格的 `--mcp-config` JSON/文件参数 |
+| `skill_dir` | `--paseo` 只读投影已安装 Paseo skills 的目标目录，例如 `~/.claude/skills` |
 
 内置：
 

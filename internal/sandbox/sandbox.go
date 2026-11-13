@@ -20,14 +20,17 @@ const InnerExe = "/run/waldo/waldo"
 
 // Spec is the input of a sandbox backend.
 type Spec struct {
-	Home        string   // HOME path string (same as the host's)
-	SandboxHome string   // persistent directory backing HOME inside the sandbox
-	Project     string   // read-write project directory
-	ExposeRO    []string // extra read-only paths (toolchains, user config)
-	Exe         string   // waldo binary on the host
-	Env         []string // initial environment of sandbox-serve
-	ContextDir  string   // private host directory containing the session guide
+	ReadOnlyMounts []ReadOnlyMount // explicitly exported session skills
+	Home           string          // HOME path string (same as the host's)
+	SandboxHome    string          // persistent directory backing HOME inside the sandbox
+	Project        string          // read-write project directory
+	ExposeRO       []string        // extra read-only paths (toolchains, user config)
+	Exe            string          // waldo binary on the host
+	Env            []string        // initial environment of sandbox-serve
+	ContextDir     string          // private host directory containing the session guide
 }
+
+type ReadOnlyMount struct{ Source, Target string }
 
 // Backend starts a process that runs `waldo sandbox-serve` inside a sandbox.
 type Backend interface {
@@ -152,6 +155,9 @@ func BwrapArgs(s Spec) ([]string, error) {
 	}
 	if s.ContextDir != "" {
 		a = append(a, "--ro-bind", s.ContextDir, proto.ContextDir)
+	}
+	for _, m := range s.ReadOnlyMounts {
+		a = append(a, "--ro-bind", m.Source, m.Target)
 	}
 	a = append(a, "--ro-bind", s.Exe, InnerExe, "--chdir", s.Project, "--clearenv")
 	for _, e := range s.Env {

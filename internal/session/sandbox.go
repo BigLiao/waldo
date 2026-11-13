@@ -42,14 +42,15 @@ type Sandbox struct {
 
 // SandboxOptions configures StartSandbox.
 type SandboxOptions struct {
-	Home         string
-	Project      string
-	Policy       *config.Policy
-	Audit        *audit.Logger
-	DataDir      string
-	Mkdirs       []string
-	OnPorts      func(active []int)
-	ContextGuide []byte
+	ReadOnlyMounts []sandbox.ReadOnlyMount
+	Home           string
+	Project        string
+	Policy         *config.Policy
+	Audit          *audit.Logger
+	DataDir        string
+	Mkdirs         []string
+	OnPorts        func(active []int)
+	ContextGuide   []byte
 }
 
 var passEnv = []string{
@@ -133,7 +134,8 @@ func StartSandbox(o SandboxOptions) (*Sandbox, error) {
 	pathv, _ := util.EnvGet(base, "PATH")
 	spec := sandbox.Spec{
 		Home: o.Home, SandboxHome: sbHome, Project: o.Project, ExposeRO: expose, Exe: exe,
-		Env: []string{"HOME=" + o.Home, "PATH=" + pathv},
+		Env:            []string{"HOME=" + o.Home, "PATH=" + pathv},
+		ReadOnlyMounts: o.ReadOnlyMounts,
 	}
 	cleanupContext := func() {}
 	keepContext := false

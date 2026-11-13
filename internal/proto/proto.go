@@ -73,6 +73,7 @@ const (
 	KindConnect  = "connect"  // A sandbox -> A client: outbound proxy connection
 	KindHostPort = "hostport" // A sandbox -> A client: connection to a host service
 	KindDial     = "dial"     // A client -> A sandbox: forwarded localhost port
+	KindPaseo    = "paseo"    // B host -> A client: fixed, session-scoped Paseo MCP HTTP exchange
 )
 
 type Header struct {
@@ -149,6 +150,8 @@ type Profile struct {
 
 // Hello is the session description A sends to B.
 type Hello struct {
+	Paseo                   bool     `json:"paseo,omitempty"`
+	ReadOnlyMounts          []string `json:"read_only_mounts,omitempty"`
 	Version                 string   `json:"version"`
 	Session                 string   `json:"session"`
 	Profile                 Profile  `json:"profile"`

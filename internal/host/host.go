@@ -25,17 +25,19 @@ import (
 
 	"github.com/hashicorp/yamux"
 
+	"waldo/internal/paseo"
 	"waldo/internal/proto"
 	"waldo/internal/util"
 )
 
 type host struct {
-	dataDir string
-	runDir  string
-	sess    *yamux.Session
-	hello   proto.Hello
-	scrub   map[string]bool
-	idMaps  idMapFiles
+	paseoGateway *paseo.Gateway
+	dataDir      string
+	runDir       string
+	sess         *yamux.Session
+	hello        proto.Hello
+	scrub        map[string]bool
+	idMaps       idMapFiles
 
 	mu       sync.Mutex
 	children []*exec.Cmd
@@ -242,6 +244,26 @@ func (h *host) prepare() (*exec.Cmd, error) {
 	if err != nil {
 		return nil, err
 	}
+	if h.hello.Paseo {
+		h.paseoGateway, err = paseo.StartGateway(func() (io.ReadWriteCloser, error) {
+			st, err := h.sess.OpenStream()
+			if err != nil {
+				return nil, err
+			}
+			if err = proto.WriteMsg(st, proto.Header{Kind: proto.KindPaseo}); err != nil {
+				st.Close()
+				return nil, err
+			}
+			return st, nil
+		})
+		if err != nil {
+			return nil, err
+		}
+		h.hello.Argv, err = paseo.RemoteConfig(h.hello.Argv, h.paseoGateway.URL, h.paseoGateway.Token)
+		if err != nil {
+			return nil, err
+		}
+	}
 	agent, err := resolveAgent(h.hello.Profile.Bin)
 	if err != nil {
 		return nil, err
@@ -385,6 +407,9 @@ func (h *host) makeStubs() (map[string]string, error) {
 
 // cleanup terminates children, unmounts and removes the run directory.
 func (h *host) cleanup() {
+	if h.paseoGateway != nil {
+		h.paseoGateway.Close()
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for _, m := range h.mounts {

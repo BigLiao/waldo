@@ -14,7 +14,7 @@
 
 | 方向 | 可信进程的处理 |
 |---|---|
-| B → A 的流 | 只接受 `fs`（SFTP）和 `exec` 两类，其余一律关闭并记审计日志（`TestRejectUnknownStreamsFromB`） |
+| B → A 的流 | 默认只接受 `fs`（SFTP）和 `exec`；显式使用 `--paseo` 时，额外接受当前会话的 `paseo` MCP 流。其余一律关闭并记审计日志（`TestRejectUnknownStreamsFromB`） |
 | 沙箱 → 宿主机的流 | 只接受 `connect`（出网代理）和 `hostport`（声明过的宿主机端口） |
 | 出网 | 按域名白名单放行；解析后拒绝回环/内网/链路本地/CGNAT 地址；直接按解析出的 IP 连接（无二次解析） |
 | 端口转发 | 只在 `127.0.0.1`/`::1` 上监听；≥1024、非数据库等知名端口、宿主机上空闲才转发 |
@@ -22,6 +22,15 @@
 | SSH | `-T -e none`、`ForwardAgent=no`、`ForwardX11=no`、`ClearAllForwardings=yes`、`PermitLocalCommand=no`、`Tunnel=no` |
 
 路径约束不靠代码：SFTP 服务端和命令执行都在沙箱里，看不到的东西就是不存在。
+
+## 可选 Paseo 桥接
+
+`waldo claude --paseo` 显式授权远端 agent 使用启动它的 Paseo MCP。必须由 Paseo 提供 HTTP MCP 配置、`callerAgentId` 和 Bearer 认证；缺少时启动失败，不会降级为仅投影 skills。版本和登录状态诊断命令不启动桥接。
+
+- 本机固定转发目标为启动配置中的回环地址 `/mcp/agents`，固定调用者和认证；远端不能改成其他地址、路径、身份或任意宿主机端口。HTTP 重定向不跟随，MCP 会话 ID 只能使用当前桥接收到的值。
+- 真实 Bearer 凭据保留在本机进程内存中，不发送给远端；MCP 配置从启动审计日志中脱敏。远端入口使用独立随机认证、临时回环端口，随 Waldo 会话关闭，转发复用原 SSH 连接。
+- 本机 `~/.claude/skills/`（优先）和 `~/.agents/skills/` 中已安装的 `paseo`、`paseo-*` 目录只读挂载到 agent 的技能目录，保留引用文件；不继承其他全局 MCP、skills、登录文件或整个主目录。
+- **这是额外的能力授权，不受项目文件沙箱约束。** Paseo 工具可以管理其他 agents 和工作区；这些 agents 是否受 Waldo 约束，取决于它们选择的 provider。凭据留在本机不能阻止远端通过已授权工具执行操作。仅在接受该权限范围时开启 `--paseo`。
 
 ## A 沙箱（bubblewrap）
 

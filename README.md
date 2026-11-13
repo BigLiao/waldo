@@ -96,7 +96,7 @@ waldo link claude
       "waldo-claude": {
         "extends": "claude",
         "label": "Claude via Waldo",
-        "command": ["/home/me/.local/bin/waldo", "claude"]
+        "command": ["/home/me/.local/bin/waldo", "claude", "--paseo"]
       }
     }
   }
@@ -104,6 +104,8 @@ waldo link claude
 ```
 
 执行 `paseo reload`（daemon 未运行时先执行 `paseo daemon start`），然后在 Paseo 中选择项目，新建聊天并选择 **Claude via Waldo** 即可。账号留在远端，文件操作和命令执行仍在本机沙箱中。详见 [Paseo provider 配置](https://paseo.sh/docs/custom-providers)。
+
+`--paseo` 会通过现有 SSH 连接桥接 Paseo MCP，并只读投影本机已安装的 `paseo`、`paseo-*` skills。请在 Paseo 的主机设置中开启 **Enable Paseo tools**；此参数需要 Paseo 注入的 agent ID 和认证，不能在普通终端中单独开启。它授予远端 agent 使用 Paseo 编排工具的权限，详见 [安全说明](docs/SECURITY.md)。
 
 连接中断导致进程退出时，本轮聊天会报错；网络恢复后可在原聊天中发消息尝试恢复对话，执行到一半的命令不会自动恢复。
 

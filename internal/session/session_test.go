@@ -25,7 +25,7 @@ func TestRejectUnknownStreamsFromB(t *testing.T) {
 		t.Fatal(err)
 	}
 	go acceptFromB(ca, &Sandbox{}, nil)
-	for _, kind := range []string{proto.KindConnect, proto.KindDial, proto.KindHostPort, proto.KindSandbox, "bogus"} {
+	for _, kind := range []string{proto.KindConnect, proto.KindDial, proto.KindHostPort, proto.KindSandbox, proto.KindPaseo, "bogus"} {
 		st, err := sb.OpenStream()
 		if err != nil {
 			t.Fatal(err)
