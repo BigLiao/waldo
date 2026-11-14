@@ -33,7 +33,7 @@ func TestSSHReconnectKeepsControlStream(t *testing.T) {
 	t.Setenv("WALDO_TEST_SSH_PIDS", pids)
 	fakeSSH(t, `for remote do :; done
 printf '%s\n' "$$" >> "$WALDO_TEST_SSH_PIDS"
-exec /bin/sh -c "$remote"
+exec /bin/sh -c "exec $remote"
 `)
 	tr := &SSH{Host: "local-test", RemoteDir: dir, Stderr: io.Discard}
 	conn, err := tr.OpenResumable()
@@ -41,6 +41,9 @@ exec /bin/sh -c "$remote"
 		t.Fatal(err)
 	}
 	defer conn.Close()
+	states := make(chan bool, 4)
+	removeNotice := conn.OnReconnect(func(up bool) { states <- up })
+	defer removeNotice()
 	session, err := yamux.Client(conn.RW, util.ResumableYamuxConfig())
 	if err != nil {
 		t.Fatal(err)
@@ -65,6 +68,19 @@ exec /bin/sh -c "$remote"
 	process, _ := os.FindProcess(pid)
 	if err := process.Kill(); err != nil {
 		t.Fatal(err)
+	}
+	// Wait for the physical connection to drop and reattach before sending
+	// more data. Kill returns before process exit, so an immediate write can
+	// otherwise finish on the original pipe without exercising a reconnect.
+	for _, want := range []bool{false, true} {
+		select {
+		case up := <-states:
+			if up != want {
+				t.Fatalf("connection state = %v, want %v", up, want)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatalf("timed out waiting for connection state %v", want)
+		}
 	}
 	// The already-open control stream must continue on the same host after
 	// the retry loop reconnects. A new host cannot interpret this mid-stream.
