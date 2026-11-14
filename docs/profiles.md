@@ -14,6 +14,7 @@
 | `mcp_config_flag` | `--paseo` 使用的 MCP 配置参数；目前支持 Claude 风格的 `--mcp-config` JSON/文件参数 |
 | `skill_dir` | `--paseo` 只读投影已安装 Paseo skills 的目标目录，例如 `~/.claude/skills` |
 | `telemetry` | 通过配置或 `--observe` 启用的原生遥测适配器：`"claude"`、`"codex"` 或 `"none"`；内置 profile 已配置，自定义 profile 未配置时只记录命令和文件请求 |
+| `tool_hooks` | `--observe` 启用的 B 侧公开工具 hook 适配器：目前为 `"claude"`；`"none"` 关闭工具 hooks，不影响模型统计 |
 
 内置：
 

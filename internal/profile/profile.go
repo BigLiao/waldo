@@ -17,7 +17,8 @@ var builtin string
 
 // Profile describes how to run one agent.
 type Profile struct {
-	Telemetry     string            `toml:"telemetry"` // claude | codex | none; opt-in local model counters
+	ToolHooks     string            `toml:"tool_hooks"` // public hook adapter for B-side tool timing
+	Telemetry     string            `toml:"telemetry"`  // claude | codex | none; opt-in local model counters
 	Name          string            `toml:"-"`
 	Bin           string            `toml:"bin"`
 	Args          []string          `toml:"args"`
@@ -63,6 +64,9 @@ func Merge(user map[string]Profile) map[string]Profile {
 		}
 		if u.Telemetry != "" {
 			b.Telemetry = u.Telemetry
+		}
+		if u.ToolHooks != "" {
+			b.ToolHooks = u.ToolHooks
 		}
 		if u.Args != nil {
 			b.Args = u.Args
@@ -110,7 +114,7 @@ func Names(m map[string]Profile) []string {
 
 // Wire converts a profile to its wire form.
 func (p Profile) Wire() proto.Profile {
-	return proto.Profile{Name: p.Name, Bin: p.Bin, Args: p.Args, Env: p.Env, Shared: p.Shared, Scrub: p.Scrub, State: p.State, Telemetry: p.Telemetry}
+	return proto.Profile{Name: p.Name, Bin: p.Bin, Args: p.Args, Env: p.Env, Shared: p.Shared, Scrub: p.Scrub, State: p.State, Telemetry: p.Telemetry, ToolHooks: p.ToolHooks}
 }
 
 // Empty returns the profile used by `waldo run`.

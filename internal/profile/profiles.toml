@@ -3,6 +3,7 @@
 
 [agent.claude]
 telemetry = "claude"
+tool_hooks = "claude"
 bin    = "claude"
 mcp_config_flag = "--mcp-config"
 skill_dir = "~/.claude/skills"

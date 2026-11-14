@@ -120,7 +120,7 @@ waldo link claude
 | `waldo allow <域名>` | 允许当前项目访问某个域名，加 `--global` 对所有项目生效 |
 | `waldo ports` | 查看 Agent 启动的服务转发到了本机哪些端口 |
 | `waldo log` | 回看 Agent 执行过的命令、改过的文件、访问过的网络 |
-| `waldo <agent> --observe` | 在命令和文件日志之外，追加模型调用的轻量统计（Claude / Codex） |
+| `waldo <agent> --observe` | 追加模型调用统计（Claude / Codex）；Claude 同时在 B 侧记录工具 hook 耗时 |
 | `waldo link <agent>` | 让 `claude` 等命令直接走 waldo |
 
 ## 按需调整

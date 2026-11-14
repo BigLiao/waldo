@@ -105,7 +105,7 @@ enabled = true
 enabled = false
 ```
 
-优先级是命令行 > 当前项目配置 > 全局配置，未配置时默认关闭。`--observe` 或 `--observe=true` 临时开启，`--observe=false` 临时关闭，新会话生效。命令和文件读写日志始终记录，不受这个模型遥测开关影响。
+优先级是命令行 > 当前项目配置 > 全局配置，未配置时默认关闭。`--observe` 或 `--observe=true` 临时开启，`--observe=false` 临时关闭，新会话生效。命令和文件读写日志始终记录，不受这个开关影响。
 
 | 日志类型 | 内容与耗时范围 |
 |---|---|
@@ -118,6 +118,16 @@ enabled = false
 模型统计复用 [Claude Code](https://code.claude.com/docs/en/monitoring-usage) 和 [Codex](https://learn.chatgpt.com/docs/config-file/config-advanced) 自带的异步 OpenTelemetry 日志，B 上临时启动仅监听回环地址、使用随机会话路径的 JSON 接收器，只提取固定数值字段，再复用现有 SSH 连接批量传到 A。不代理模型 API、不增加模型请求、不注入 MCP，也不修改持久配置。启用模型统计会为本次进程配置本地日志 exporter；需要保留原有日志 exporter 时不要开启。模型输入、响应和工具内容不写入新增统计日志；原有命令与写操作审计保持原样。
 
 未配置时默认不开启客户端原生遥测；命令和文件统计始终保留。遥测导出、转发是尽力而为的，断线、接收器不可用或 Agent 版本不支持相关事件时可能缺少模型统计，不会回退为估算模型时间，也不会阻止命令和文件操作。自定义 Agent 可配置 `telemetry` 适配器，见 [profiles.md](profiles.md)。普通遥测事件经过批处理，日志出现时间会晚于实际操作；本实现没有逐请求文件明细、全量进程跟踪或模型调用的关键路径分析。
+
+### B 侧工具耗时
+
+Claude profile 在启用 `--observe` 时额外注入公开的 HTTP `PreToolUse`、`PostToolUse`、`PostToolUseFailure` hooks，接收器只监听 B 的回环地址。日志只写 B 的 `~/.local/share/waldo/log/tool-timing.jsonl`（自定义 `remote_dir` 时为其 `log/tool-timing.jsonl`），不转发到 A，不修改 Claude、SDK 或持久 settings。
+
+按 `s`（Waldo 会话）、`agent_session_id` 和 `tool_use_id` 配对 `tool-start` / `tool-end`。`duration_ms` 是 Claude 可选提供的工具执行耗时，不含权限等待和 PreToolUse hooks；`hook_elapsed_ms` 是 B 上两次 hook 到达之间的间隔，包含期间的等待，使用同一进程的单调时钟。字段缺失时不估算，缺少结束事件的调用标为 `tool-incomplete`，不是已完成耗时。可按工具类别汇总次数、平均和最大值。这仍不覆盖 PreToolUse 前的调度或 PostToolUse 后的处理，也不是 UI 端到端耗时；后台工具的 hook 完成可能仅代表已提交后台任务。
+
+统计保留工具名、关联 ID、状态和耗时，不保存 hook 中的命令、输入输出、路径或错误正文。原生 HTTP hook 会将完整负载发到本地接收器；超过 4 MiB 的事件跳过。请求仅入有界队列，写盘异步进行，队列满或负载无效时丢统计并记录 `dropped`；hook 超时为 1 秒，响应不包含权限决策或上下文。
+
+临时 settings 会保留已有内联 settings 和 hooks；遇到 `--settings <文件>` 或显式 `disableAllHooks` 时跳过工具观测并在 B 的 `host.log` 说明，不覆盖原配置。原生版本不支持 HTTP hooks、已有 `allowedHttpHookUrls` 或组织策略禁止时也可能没有事件；Waldo 不绕过这些限制。设置 profile 的 `tool_hooks = "none"` 可只保留模型统计。
 
 ## 文件投射性能
 

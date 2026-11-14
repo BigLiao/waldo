@@ -31,7 +31,7 @@ const usage = `waldo — Agent 跑在你的服务器上，它的"手"落在这�
   waldo setup <user@host> [--adopt-login=false] [--skip-deps]
                                              默认复用 B 的配置和登录，自动补齐依赖并检查
   waldo <agent> [--paseo] [--observe[=true|false]] [参数...]
-                                             运行 Agent（内置: %s）；--observe 控制模型调用统计
+                                             运行 Agent（内置: %s）；--observe 控制模型及工具耗时统计
   waldo run [--] <命令> [参数...]             用空 profile 运行任意 CLI Agent
   waldo doctor                                检查两端依赖、时钟偏差、Agent 安装/登录
   waldo allow [--global] <域名>               给当前项目放行一个出网域名

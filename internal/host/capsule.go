@@ -441,6 +441,7 @@ func (h *host) runAgent(cmd *exec.Cmd, st io.ReadWriteCloser) int {
 	// The final telemetry batch must enter the transport before A sees the
 	// agent's exit and closes the session. This is bounded and opt-in only.
 	h.stopModelObservation()
+	h.stopToolObservation()
 	fw.WriteJSON(proto.FExit, ex)
 	st.Close()
 	if master != nil {

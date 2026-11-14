@@ -27,10 +27,12 @@ import (
 
 	"waldo/internal/paseo"
 	"waldo/internal/proto"
+	"waldo/internal/toolhooks"
 	"waldo/internal/util"
 )
 
 type host struct {
+	toolObservation  *toolhooks.Collector
 	modelObservation *modelObservation
 	observeEnv       []string
 	paseoGateway     *paseo.Gateway
@@ -274,6 +276,7 @@ func (h *host) prepare() (*exec.Cmd, error) {
 		}
 	}
 	h.startModelObservation()
+	h.startToolObservation()
 	agent, err := resolveAgent(h.hello.Profile.Bin)
 	if err != nil {
 		return nil, err
@@ -482,6 +485,7 @@ func (h *host) makeStubs() (map[string]string, error) {
 
 // cleanup terminates children, unmounts and removes the run directory.
 func (h *host) cleanup() {
+	h.stopToolObservation()
 	h.stopModelObservation()
 	if h.paseoGateway != nil {
 		h.paseoGateway.Close()

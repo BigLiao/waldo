@@ -155,6 +155,7 @@ type PortEvent struct {
 
 // Profile is the agent profile as sent to B.
 type Profile struct {
+	ToolHooks string            `json:"tool_hooks,omitempty"`
 	Telemetry string            `json:"telemetry,omitempty"`
 	Name      string            `json:"name"`
 	Bin       string            `json:"bin"`
