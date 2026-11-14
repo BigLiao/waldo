@@ -15,6 +15,7 @@ import (
 	"github.com/BurntSushi/toml"
 
 	"waldo/internal/profile"
+	"waldo/internal/proto"
 	"waldo/internal/util"
 )
 
@@ -62,6 +63,10 @@ type ObserveCfg struct {
 	Enabled *bool `toml:"enabled"`
 }
 
+type ExecutionCfg struct {
+	Mode string `toml:"mode"`
+}
+
 type NetCfg struct {
 	Allow        []string `toml:"allow"`
 	Ports        any      `toml:"ports"` // "auto" | "off" | [3000, 5173]
@@ -70,14 +75,16 @@ type NetCfg struct {
 }
 
 type ProjectCfg struct {
-	Net     NetCfg     `toml:"net"`
-	Sandbox SandboxCfg `toml:"sandbox"`
-	Context ContextCfg `toml:"context"`
-	FS      FSCfg      `toml:"fs"`
-	Observe ObserveCfg `toml:"observe"`
+	Execution ExecutionCfg `toml:"execution"`
+	Net       NetCfg       `toml:"net"`
+	Sandbox   SandboxCfg   `toml:"sandbox"`
+	Context   ContextCfg   `toml:"context"`
+	FS        FSCfg        `toml:"fs"`
+	Observe   ObserveCfg   `toml:"observe"`
 }
 
 type Config struct {
+	Execution ExecutionCfg               `toml:"execution"`
 	Host      string                     `toml:"host"`
 	SSHArgs   []string                   `toml:"ssh_args"`
 	RemoteDir string                     `toml:"remote_dir"`
@@ -128,6 +135,7 @@ type PortsMode struct {
 
 // Policy is the effective policy for one project.
 type Policy struct {
+	ExecMode         string
 	Project          string
 	Allow            []string // static allow list (defaults + config)
 	Ports            PortsMode
@@ -207,6 +215,7 @@ func (c *Config) PolicyFor(project string) (*Policy, error) {
 		}
 	}
 	applyContext(c.Context)
+	p.ExecMode = c.Execution.Mode
 	if c.Observe.Enabled != nil {
 		p.ObserveEnabled = *c.Observe.Enabled
 	}
@@ -261,6 +270,9 @@ func (c *Config) PolicyFor(project string) (*Policy, error) {
 		p.ExposeRO = append(p.ExposeRO, pc.Sandbox.ExposeRO...)
 		p.PassEnv = append(p.PassEnv, pc.Sandbox.PassEnv...)
 		applyContext(pc.Context)
+		if pc.Execution.Mode != "" {
+			p.ExecMode = pc.Execution.Mode
+		}
 		if pc.Observe.Enabled != nil {
 			p.ObserveEnabled = *pc.Observe.Enabled
 		}
@@ -297,10 +309,23 @@ func (c *Config) PolicyFor(project string) (*Policy, error) {
 		}
 	}
 	p.InstructionFiles = names
+	if p.ExecMode == "" {
+		p.ExecMode = proto.ExecHost
+	}
+	if err := ValidateExecMode(p.ExecMode); err != nil {
+		return nil, err
+	}
 	for i, e := range p.ExposeRO {
 		p.ExposeRO[i] = filepath.Clean(util.ExpandHome(e, home))
 	}
 	return p, nil
+}
+
+func ValidateExecMode(mode string) error {
+	if mode != proto.ExecHost && mode != proto.ExecRemote {
+		return fmt.Errorf("execution.mode: expected host or remote, got %q", mode)
+	}
+	return nil
 }
 
 // ---- dynamic allow list (`waldo allow`) ----

@@ -36,3 +36,17 @@ func TestContextGuideDescribesCacheAsConditional(t *testing.T) {
 		t.Fatal("guide claims a configured cache is already active")
 	}
 }
+
+func TestContextGuideRemoteModeExplainsBothShells(t *testing.T) {
+	t.Setenv("WALDO_CONFIG_DIR", t.TempDir())
+	p := &config.Policy{Project: "/project", ExecMode: proto.ExecRemote}
+	guide := string(contextGuide(p, "B", "test", "/project", []string{"/project"}))
+	for _, want := range []string{"内置 Bash", "mcp__waldo_host__host_bash", "未命中的读取仍需访问 A", "修改真实工作区", "虚拟环境", "localhost 指 B", "现有本机沙箱"} {
+		if !strings.Contains(guide, want) {
+			t.Fatalf("remote guide lacks %q", want)
+		}
+	}
+	if strings.Contains(guide, "Commands launched through PATH tools") {
+		t.Fatal("remote guide still says PATH tools forward to A")
+	}
+}

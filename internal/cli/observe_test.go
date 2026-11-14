@@ -16,7 +16,7 @@ func TestObservePrefixPreservesPrompt(t *testing.T) {
 		{[]string{"-p", "--observe"}, []string{"-p", "--observe"}, false, false},
 		{[]string{"--", "--observe"}, []string{"--", "--observe"}, false, false},
 	} {
-		out, paseo, observe, err := wrapperPrefix(tc.in)
+		out, paseo, observe, _, err := wrapperPrefix(tc.in)
 		if err != nil || !reflect.DeepEqual(out, tc.out) || paseo != tc.paseo || (observe != nil && *observe) != tc.observe {
 			t.Fatalf("%v => %v, %t, %v, %v", tc.in, out, paseo, observe, err)
 		}
@@ -35,13 +35,13 @@ func TestObserveExplicitOverrideAndInheritance(t *testing.T) {
 		{[]string{"--observe", "--observe=false"}, new(false)},
 		{[]string{"--observe=false", "--observe"}, new(true)},
 	} {
-		_, _, got, err := wrapperPrefix(tc.args)
+		_, _, got, _, err := wrapperPrefix(tc.args)
 		if err != nil || !reflect.DeepEqual(got, tc.want) {
 			t.Fatalf("%v: got %v, want %v, err %v", tc.args, got, tc.want, err)
 		}
 	}
 	for _, value := range []string{"", "yes", "FALSE", "1"} {
-		if _, _, _, err := wrapperPrefix([]string{"--observe=" + value}); err == nil {
+		if _, _, _, _, err := wrapperPrefix([]string{"--observe=" + value}); err == nil {
 			t.Fatalf("accepted invalid --observe=%s", value)
 		}
 	}

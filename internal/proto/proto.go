@@ -64,6 +64,12 @@ const NeedInstall = "WALDO-NEED-INSTALL"
 const ContextDir = "/run/waldo/context"
 const ContextFile = ContextDir + "/waldo.md"
 
+const (
+	ExecHost     = "host"
+	ExecRemote   = "remote"
+	ToolHostBash = "host_bash"
+)
+
 // Stream kinds.
 const (
 	KindCtl      = "ctl"      // A client -> B host: Hello / HelloAck
@@ -89,7 +95,8 @@ type Header struct {
 
 // ExecReq describes one process start that a stub forwards to A.
 type ExecReq struct {
-	Path string   `json:"path"` // absolute path of the program to execute
+	Tool string   `json:"tool,omitempty"` // optional fixed tool attribution, not an authorization claim
+	Path string   `json:"path"`           // absolute path of the program to execute
 	Argv []string `json:"argv"`
 	Cwd  string   `json:"cwd"`
 	Env  []string `json:"env"`
@@ -155,19 +162,21 @@ type PortEvent struct {
 
 // Profile is the agent profile as sent to B.
 type Profile struct {
-	ToolHooks string            `json:"tool_hooks,omitempty"`
-	Telemetry string            `json:"telemetry,omitempty"`
-	Name      string            `json:"name"`
-	Bin       string            `json:"bin"`
-	Args      []string          `json:"args"`
-	Env       map[string]string `json:"env"`
-	Shared    []string          `json:"shared"`
-	Scrub     []string          `json:"scrub"`
-	State     []string          `json:"state"`
+	MCPConfigFlag string            `json:"mcp_config_flag,omitempty"`
+	ToolHooks     string            `json:"tool_hooks,omitempty"`
+	Telemetry     string            `json:"telemetry,omitempty"`
+	Name          string            `json:"name"`
+	Bin           string            `json:"bin"`
+	Args          []string          `json:"args"`
+	Env           map[string]string `json:"env"`
+	Shared        []string          `json:"shared"`
+	Scrub         []string          `json:"scrub"`
+	State         []string          `json:"state"`
 }
 
 // Hello is the session description A sends to B.
 type Hello struct {
+	ExecMode                string   `json:"exec_mode,omitempty"`
 	Observe                 bool     `json:"observe,omitempty"`
 	Paseo                   bool     `json:"paseo,omitempty"`
 	ReadOnlyMounts          []string `json:"read_only_mounts,omitempty"`

@@ -21,6 +21,7 @@ import (
 
 	"waldo/internal/audit"
 	"waldo/internal/config"
+	"waldo/internal/hostbash"
 	"waldo/internal/paseo"
 	"waldo/internal/profile"
 	"waldo/internal/proto"
@@ -32,7 +33,8 @@ import (
 
 // Options for one agent session.
 type Options struct {
-	Observe        *bool // nil inherits global/project configuration
+	ExecMode       string // empty inherits global/project configuration
+	Observe        *bool  // nil inherits global/project configuration
 	Paseo          bool
 	paseoBroker    *paseo.Broker
 	readOnlyMounts []string
@@ -112,6 +114,7 @@ func Run(o Options) int {
 		return 1
 	}
 	var skillMounts []sandbox.ReadOnlyMount
+	probe := hostbash.IsProbe(o.Args)
 	if o.Paseo {
 		if o.Profile.MCPConfigFlag != "--mcp-config" || o.Profile.SkillDir == "" {
 			warnf("此 Agent 尚未配置 Paseo MCP / skills 注入")
@@ -119,7 +122,6 @@ func Run(o Options) int {
 		}
 		// Discovery commands never open an interactive agent and have no
 		// caller identity. Keep provider version/auth diagnostics operational.
-		probe := len(o.Args) > 0 && (o.Args[0] == "--version" || o.Args[0] == "-v" || o.Args[0] == "version" || (o.Args[0] == "auth" && len(o.Args) > 1 && o.Args[1] == "status"))
 		if !probe {
 			var endpoint *paseo.Endpoint
 			o.Args, endpoint, err = paseo.Configs(o.Args)
@@ -157,6 +159,32 @@ func Run(o Options) int {
 	}
 	if o.Observe != nil {
 		pol.ObserveEnabled = *o.Observe
+	}
+	// Discovery subcommands neither call tools nor models and can reject the
+	// session-only settings/telemetry arguments used by the observers.
+	if probe {
+		pol.ObserveEnabled = false
+	}
+	if o.ExecMode != "" {
+		pol.ExecMode = o.ExecMode
+	}
+	if err := config.ValidateExecMode(pol.ExecMode); err != nil {
+		warnf("%v", err)
+		return 2
+	}
+	if pol.ExecMode == proto.ExecRemote && o.Profile.MCPConfigFlag != "--mcp-config" {
+		warnf("--exec-mode remote 需要支持 --mcp-config 的 Agent profile（内置 Claude 支持）")
+		return 2
+	}
+	o.ExecMode = pol.ExecMode
+	if o.ExecMode == proto.ExecRemote {
+		args := append(append([]string(nil), o.Profile.Args...), o.Args...)
+		o.Args, err = hostbash.Configs(args)
+		if err != nil {
+			warnf("%v", err)
+			return 2
+		}
+		o.Profile.Args = nil
 	}
 	// Runtime roots stay uncached even when selected as the entire project.
 	if project == "/tmp" || project == proto.ContextDir {
@@ -199,7 +227,7 @@ func Run(o Options) int {
 		guide = contextGuide(pol, host, o.Profile.Name, cwd, mounts)
 	}
 
-	al.Log("session", map[string]any{"agent": o.Profile.Name, "project": project, "host": host, "args": paseo.AuditArgs(o.Args), "paseo": o.paseoBroker != nil, "observe": pol.ObserveEnabled, "metadata_cache_ttl": pol.MetadataCacheTTL.String(), "content_cache_ttl": pol.ContentCacheTTL.String()})
+	al.Log("session", map[string]any{"agent": o.Profile.Name, "project": project, "host": host, "args": paseo.AuditArgs(o.Args), "paseo": o.paseoBroker != nil, "exec_mode": o.ExecMode, "observe": pol.ObserveEnabled, "metadata_cache_ttl": pol.MetadataCacheTTL.String(), "content_cache_ttl": pol.ContentCacheTTL.String()})
 	snap := sandbox.TakeSnapshot(project)
 
 	state := runState{PID: os.Getpid(), Session: id, Agent: o.Profile.Name, Project: project, Host: host}
@@ -274,8 +302,9 @@ func runRemote(o Options, host string, sb *Sandbox, id, cwd, project string, mou
 
 	interactive := term.IsTerminal(0) && term.IsTerminal(1)
 	hello := proto.Hello{
-		Observe: sb.Observe,
-		Paseo:   o.paseoBroker != nil, ReadOnlyMounts: o.readOnlyMounts,
+		ExecMode: o.ExecMode,
+		Observe:  sb.Observe,
+		Paseo:    o.paseoBroker != nil, ReadOnlyMounts: o.readOnlyMounts,
 		Version: proto.FullVersion(), Session: id, Profile: o.Profile.Wire(), Argv: o.Args,
 		Cwd: cwd, Project: project, Mounts: mounts, Facts: sb.Facts, Interactive: interactive,
 		TimeUnixMs:              time.Now().UnixMilli(),
@@ -420,14 +449,23 @@ func acceptFromB(bs *yamux.Session, sb *Sandbox, al *audit.Logger, brokers ...*p
 					return
 				}
 				id, start := execSeq.Add(1), time.Now()
-				al.Log("exec", map[string]any{"id": id, "argv": h.Exec.Argv, "path": h.Exec.Path, "cwd": h.Exec.Cwd})
+				// B is untrusted. Keep only the known observational label; it
+				// never changes execution permissions or the target sandbox.
+				if h.Exec.Tool != proto.ToolHostBash {
+					h.Exec.Tool = ""
+				}
+				fields := map[string]any{"id": id, "argv": h.Exec.Argv, "path": h.Exec.Path, "cwd": h.Exec.Cwd}
+				if h.Exec.Tool != "" {
+					fields["tool"] = h.Exec.Tool
+				}
+				al.Log("exec", fields)
 				in, err := sb.Open(proto.Header{Kind: proto.KindExec, Exec: h.Exec})
 				if err != nil {
-					logExecEnd(al, id, h.Exec.Path, start, time.Now(), "start_failed", nil)
+					logExecEnd(al, id, h.Exec, start, time.Now(), "start_failed", nil)
 					st.Close()
 					return
 				}
-				spliceExec(st, in, al, id, h.Exec.Path, start)
+				spliceExec(st, in, al, id, h.Exec, start)
 			default:
 				al.Log("reject", map[string]any{"from": "B", "stream": h.Kind})
 				st.Close()

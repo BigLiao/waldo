@@ -56,6 +56,9 @@ host = "me@my-server"
 # ssh_args   = ["-F", "/path/to/ssh_config"]   # 追加给 ssh 的参数（也可用环境变量 WALDO_SSH_ARGS）
 # remote_dir = "~/.local/share/waldo"           # B 上的数据目录
 
+[execution]
+mode = "host"                     # 默认 host；remote 使用远端 Bash + 本机 host_bash MCP
+
 [sandbox]
 expose_ro = ["~/.config/nvim"]     # 自动探测的工具链之外再只读挂载
 pass_env  = ["ANTHROPIC_MODEL", "MY_APP_*"]   # 额外传入沙箱和 Agent 的环境变量（glob）
@@ -78,12 +81,30 @@ net.host_ports = [5432, 6379]
 fs.metadata_cache_ttl = "30s"      # 当前项目覆盖全局 TTL
 fs.content_cache_ttl = "30s"
 observe.enabled = false          # 此项目关闭全局模型统计设置
+execution.mode = "remote"        # 此项目覆盖全局命令模式
 
 [agent.claude]                        # 覆盖/新增 Agent profile，见 docs/profiles.md
 env = { CLAUDE_CODE_MAX_OUTPUT_TOKENS = "16000" }
 ```
 
 `waldo allow` 写的是 `~/.config/waldo/allowed.json`，与 `config.toml` 合并。
+
+## 命令执行模式
+
+默认 `host` 沿用原行为：B 上的 PATH 命令转发到 A 的沙箱。可在全局或项目配置中选择 `remote`，也可用启动参数临时覆盖（参数放在 Agent 参数之前）：
+
+```sh
+waldo claude --exec-mode remote
+waldo claude --paseo --exec-mode host  # 临时覆盖配置，恢复本机执行
+```
+
+`remote` 模式下，内置 Bash 及普通子命令在 B 的胶囊中执行，使用 B 的标准系统工具（`/usr/bin`、`/usr/local/bin` 等）；Python 等所需依赖需在 B 安装。Waldo 自动注入 stdio MCP 工具 `mcp__waldo_host__host_bash`，需要 A 的虚拟环境、构建测试依赖或本机服务时调用它。工具复用当前 SSH 的原有 exec 通道，始终在 A 沙箱内执行，不增加安装步骤、监听端口或宿主机权限。与 `--paseo` 可同时使用；目前内置 Claude 支持，自定义 profile 需声明 `mcp_config_flag = "--mcp-config"`，使用相同配置格式。Codex 和空 profile 暂不支持此模式，可用 `--exec-mode host` 覆盖全局设置。
+
+`host_bash` 接收必填 `command`、可选绝对路径 `cwd` 和 `timeout_ms`（默认 120000，最长 600000），每次启动独立的非交互 Bash，使用 A 会话启动时的沙箱环境，不继承 B 的凭证或工具链环境。返回 stdout、stderr、exit_code，每路输出最多 128 KiB，超过时标记 truncated；超时、取消或 MCP 退出会关闭命令通道并终止仍在运行的命令进程组。不提供持久 Shell、交互输入或后台任务管理。
+
+项目仍是同一份投影：缓存未命中的读和所有写入都经过 A，远端 Bash 写文件也会修改本机工作区。`waldo.md` 会按实际模式说明两种工具的用法；关闭 `[context] enabled` 时不注入该指南。B 的 Bash 使用 B 的网络和 localhost，A 的网络白名单、宿主机服务与开发端口转发适用于 `host_bash`。实际加速取决于缓存命中、文件访问量及依赖是否适合在 B 运行。
+
+`host_bash` 调用始终写入 A 的 `exec` / `exec-end`，额外标记 `tool = "host_bash"`，可按会话统计调用次数、平均/最大耗时、退出码和中断状态；`waldo log -f | rg 'tool=host_bash'` 可单独查看。`exec-end.duration_ms` 仍是 A 接收请求到观察到执行结束的耗时，不包含完整往返。开启 `--observe` 后，B 的 `tool-timing.jsonl` 同时按 `tool = "mcp__waldo_host__host_bash"` 记录原生工具耗时与 hook 间隔（范围见下文）；B 的普通 Bash 不写入 A 的 exec 日志。
 
 ## 轻量运行日志
 

@@ -88,7 +88,7 @@ func TestSpliceExecPreservesBytesAndRecordsCompletion(t *testing.T) {
 	defer logger.Close()
 	done := make(chan struct{})
 	go func() {
-		spliceExec(remote, sandbox, logger, 42, "/bin/bash", time.Now().Add(-100*time.Millisecond))
+		spliceExec(remote, sandbox, logger, 42, &proto.ExecReq{Path: "/bin/bash", Tool: proto.ToolHostBash}, time.Now().Add(-100*time.Millisecond))
 		close(done)
 	}()
 
@@ -135,7 +135,7 @@ func TestSpliceExecPreservesBytesAndRecordsCompletion(t *testing.T) {
 	if err := json.Unmarshal(data, &event); err != nil {
 		t.Fatal(err)
 	}
-	for key, want := range map[string]any{"kind": "exec-end", "id": float64(42), "program": "bash", "status": "completed", "exit_code": float64(143), "signal": float64(15)} {
+	for key, want := range map[string]any{"kind": "exec-end", "id": float64(42), "program": "bash", "tool": "host_bash", "status": "completed", "exit_code": float64(143), "signal": float64(15)} {
 		if !reflect.DeepEqual(event[key], want) {
 			t.Errorf("%s=%v, want %v", key, event[key], want)
 		}
@@ -159,7 +159,7 @@ func TestSpliceExecRecordsDisconnectWithoutExit(t *testing.T) {
 	defer logger.Close()
 	done := make(chan struct{})
 	go func() {
-		spliceExec(remote, sandbox, logger, 1, filepath.Join("/usr", "bin", "python3"), time.Now())
+		spliceExec(remote, sandbox, logger, 1, &proto.ExecReq{Path: filepath.Join("/usr", "bin", "python3")}, time.Now())
 		close(done)
 	}()
 	process.Close()

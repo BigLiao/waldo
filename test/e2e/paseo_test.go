@@ -12,6 +12,12 @@ import (
 )
 
 func TestPaseoBridgeAndReadOnlySkills(t *testing.T) {
+	for _, mode := range []string{"host", "remote"} {
+		t.Run(mode, func(t *testing.T) { testPaseoBridgeAndReadOnlySkills(t, mode) })
+	}
+}
+
+func testPaseoBridgeAndReadOnlySkills(t *testing.T, mode string) {
 	e, agent := setup(t)
 	home := filepath.Join(e.Root, "home")
 	for _, name := range []string{"paseo", "unrelated"} {
@@ -31,7 +37,7 @@ func TestPaseoBridgeAndReadOnlySkills(t *testing.T) {
 	}))
 	defer upstream.Close()
 	cfg, _ := json.Marshal(map[string]any{"mcpServers": map[string]any{"paseo": map[string]any{"type": "http", "url": upstream.URL + "/mcp/agents?callerAgentId=e2e-agent", "headers": map[string]string{"Authorization": "Bearer e2e-source-secret"}}}})
-	e.WriteConfig("[agent.claude]\nbin = " + strconvQuote(agent) + "\nstate = []\nshared = []\n")
+	e.WriteConfig("[execution]\nmode=" + strconvQuote(mode) + "\n[agent.claude]\nbin = " + strconvQuote(agent) + "\nstate = []\nshared = []\n")
 	cmd := e.Cmd("claude", "--paseo", "paseo", "--mcp-config", string(cfg))
 	cmd.Env = append(cmd.Env, "HOME="+home)
 	out, err := cmd.CombinedOutput()

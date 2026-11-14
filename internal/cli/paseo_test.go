@@ -14,7 +14,7 @@ func TestPaseoPrefixPreservesPrompt(t *testing.T) {
 		{[]string{"-p", "--paseo"}, []string{"-p", "--paseo"}, false},
 		{[]string{"--", "--paseo"}, []string{"--", "--paseo"}, false},
 	} {
-		out, enabled, _, err := wrapperPrefix(tc.in)
+		out, enabled, _, _, err := wrapperPrefix(tc.in)
 		if err != nil || enabled != tc.enabled || !reflect.DeepEqual(out, tc.out) {
 			t.Fatalf("%v -> %v, %v", tc.in, out, enabled)
 		}

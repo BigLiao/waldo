@@ -114,7 +114,7 @@ func Names(m map[string]Profile) []string {
 
 // Wire converts a profile to its wire form.
 func (p Profile) Wire() proto.Profile {
-	return proto.Profile{Name: p.Name, Bin: p.Bin, Args: p.Args, Env: p.Env, Shared: p.Shared, Scrub: p.Scrub, State: p.State, Telemetry: p.Telemetry, ToolHooks: p.ToolHooks}
+	return proto.Profile{Name: p.Name, Bin: p.Bin, Args: p.Args, Env: p.Env, Shared: p.Shared, Scrub: p.Scrub, State: p.State, Telemetry: p.Telemetry, ToolHooks: p.ToolHooks, MCPConfigFlag: p.MCPConfigFlag}
 }
 
 // Empty returns the profile used by `waldo run`.

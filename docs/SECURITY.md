@@ -29,6 +29,12 @@
 
 Claude 的 B 侧工具计时同样由 `--observe` 开启，通过临时内联 settings 添加公开 HTTP hooks；不执行 hook shell、不修改持久配置、不返回权限决策或上下文。接收器使用 B 回环地址和随机会话路径，只将固定工具标识、状态及耗时异步写到 B 的 `log/tool-timing.jsonl`，原生 hook 的完整输入输出仅在本地接收时被消费，不落盘或转发 A；负载、并发、队列和未完成调用数量均有上限。事件可缺失或被 B 伪造，不作为审计完整性保证；已有 hooks 和组织策略仍然生效。
 
+## 可选远端命令模式
+
+`[execution] mode = "remote"` 或 `--exec-mode remote` 将普通 Bash 子命令留在 B 的胶囊中执行。B 的标准工具目录只读可见，B 的 HOME 和根目录不会整体挂载；项目仍经原 SFTP 投影，所有写入影响 A 的工作区。B 的普通命令沿用 B 的网络，不受 A 的出网白名单限制，也不写入 A 的命令执行日志。
+
+注入的 `host_bash` 是 Waldo 二进制自带的 stdio MCP，不开放 HTTP 端口，也不读取或转发其他全局 MCP 配置。其命令经过现有 Unix socket、SSH exec 通道及 A 沙箱执行，不新增对 A 的访问权限；命令环境取自 A 的原始沙箱环境，再执行原有凭证清理与网络代理策略，不把 B 的环境变量传给 A。工具选择文案仅供 Agent 使用，不能作为权限边界；超时和取消通过关闭通道终止未退出的命令，已完成的文件修改不会回滚。
+
 ## 可选 Paseo 桥接
 
 `waldo claude --paseo` 显式授权远端 agent 使用启动它的 Paseo MCP。必须由 Paseo 提供 HTTP MCP 配置、`callerAgentId` 和 Bearer 认证；缺少时启动失败，不会降级为仅投影 skills。版本和登录状态诊断命令不启动桥接。

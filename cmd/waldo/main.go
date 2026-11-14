@@ -14,6 +14,7 @@ import (
 
 	"waldo/internal/cli"
 	"waldo/internal/host"
+	"waldo/internal/hostbash"
 	"waldo/internal/serve"
 	"waldo/internal/stub"
 )
@@ -25,6 +26,8 @@ func main() {
 	}
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
+		case "host-bash-mcp":
+			os.Exit(hostbash.Main(os.Args[2:]))
 		case "host":
 			os.Exit(host.Main(os.Args[2:]))
 		case "sandbox-serve":

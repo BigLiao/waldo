@@ -87,21 +87,24 @@ func (c execObservedConn) CloseWrite() error {
 // spliceExec measures the trusted A forwarding boundary, not B's full tool
 // invocation or just process runtime. It includes sandbox execution and its
 // cache barrier. Disk logging happens after forwarding has finished.
-func spliceExec(b, a io.ReadWriteCloser, al *audit.Logger, id uint64, program string, start time.Time) {
+func spliceExec(b, a io.ReadWriteCloser, al *audit.Logger, id uint64, req *proto.ExecReq, start time.Time) {
 	observer := &execObserver{}
 	util.Splice(b, execObservedConn{ReadWriteCloser: a, observer: observer})
 	end, status := observer.endedAt, "completed"
 	if observer.exit == nil {
 		end, status = time.Now(), "disconnected"
 	}
-	logExecEnd(al, id, program, start, end, status, observer.exit)
+	logExecEnd(al, id, req, start, end, status, observer.exit)
 }
 
-func logExecEnd(al *audit.Logger, id uint64, program string, start, end time.Time, status string, exit *proto.Exit) {
+func logExecEnd(al *audit.Logger, id uint64, req *proto.ExecReq, start, end time.Time, status string, exit *proto.Exit) {
 	fields := map[string]any{
-		"id": id, "program": filepath.Base(program), "status": status,
+		"id": id, "program": filepath.Base(req.Path), "status": status,
 		"scope":       "a_forward",
 		"duration_ms": float64(end.Sub(start)) / float64(time.Millisecond),
+	}
+	if req.Tool == proto.ToolHostBash {
+		fields["tool"] = req.Tool
 	}
 	if exit != nil {
 		fields["exit_code"] = exit.Code

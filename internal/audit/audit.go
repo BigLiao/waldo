@@ -116,6 +116,9 @@ func Format(line string) string {
 			a = string(r[:240]) + "…"
 		}
 		detail = fmt.Sprintf("%s  (cwd %v)", a, ev["cwd"])
+		if tool, ok := ev["tool"].(string); ok && tool != "" {
+			detail = "tool=" + tool + " " + detail
+		}
 	case "write", "remove", "rename", "mkdir", "rmdir", "symlink", "link", "setstat":
 		detail = fmt.Sprint(ev["path"])
 		if to, ok := ev["to"]; ok {

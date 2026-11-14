@@ -44,6 +44,15 @@ func main() {
 		os.Exit(2)
 	}
 	switch os.Args[1] {
+	case "bash-location":
+		out, code := run("", "bash", "-c", "readlink /proc/self/ns/net")
+		result("bash_netns", out)
+		result("bash_code", code)
+	case "remote-bash":
+		if err := remoteBashProbe(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
 	case "tool-hooks":
 		if err := toolHooksProbe(os.Args[2:]); err != nil {
 			fmt.Fprintln(os.Stderr, err)

@@ -207,6 +207,9 @@ func (h *host) runtimeBase() string {
 
 // prepare mounts, stubs and builds the capsule command.
 func (h *host) prepare() (*exec.Cmd, error) {
+	if err := h.configureExecMode(); err != nil {
+		return nil, err
+	}
 	if h.hello.MetadataCacheTTLSeconds < 0 || h.hello.MetadataCacheTTLSeconds > 60 {
 		return nil, fmt.Errorf("invalid metadata cache TTL: %d seconds", h.hello.MetadataCacheTTLSeconds)
 	}
@@ -251,9 +254,12 @@ func (h *host) prepare() (*exec.Cmd, error) {
 		}
 		mnts[i] = dir
 	}
-	stubDirs, err := h.makeStubs()
-	if err != nil {
-		return nil, err
+	stubDirs := map[string]string{}
+	if h.hello.ExecMode != proto.ExecRemote {
+		stubDirs, err = h.makeStubs()
+		if err != nil {
+			return nil, err
+		}
 	}
 	if h.hello.Paseo {
 		h.paseoGateway, err = paseo.StartGateway(func() (io.ReadWriteCloser, error) {

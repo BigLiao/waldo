@@ -121,6 +121,7 @@ waldo link claude
 | `waldo ports` | 查看 Agent 启动的服务转发到了本机哪些端口 |
 | `waldo log` | 回看 Agent 执行过的命令、改过的文件、访问过的网络 |
 | `waldo <agent> --observe` | 追加模型调用统计（Claude / Codex）；Claude 同时在 B 侧记录工具 hook 耗时 |
+| `waldo claude --exec-mode remote` | Bash 在远端执行，需要本机环境时调用注入的 `host_bash` MCP；配置 `[execution] mode = "remote"` 可默认开启，`host` 切回原模式 |
 | `waldo link <agent>` | 让 `claude` 等命令直接走 waldo |
 
 ## 按需调整

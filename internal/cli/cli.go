@@ -30,7 +30,7 @@ const usage = `waldo — Agent 跑在你的服务器上，它的"手"落在这�
 用法:
   waldo setup <user@host> [--adopt-login=false] [--skip-deps]
                                              默认复用 B 的配置和登录，自动补齐依赖并检查
-  waldo <agent> [--paseo] [--observe[=true|false]] [参数...]
+  waldo <agent> [--paseo] [--observe[=true|false]] [--exec-mode host|remote] [参数...]
                                              运行 Agent（内置: %s）；--observe 控制模型及工具耗时统计
   waldo run [--] <命令> [参数...]             用空 profile 运行任意 CLI Agent
   waldo doctor                                检查两端依赖、时钟偏差、Agent 安装/登录
@@ -54,7 +54,7 @@ func loadConfig() (*config.Config, int) {
 
 // Main dispatches A-side commands. args excludes the program name.
 func Main(args []string) int {
-	args, withPaseo, withObserve, err := wrapperPrefix(args)
+	args, withPaseo, withObserve, withExecMode, err := wrapperPrefix(args)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "waldo: %v\n", err)
 		return 2
@@ -77,6 +77,12 @@ func Main(args []string) int {
 	if withObserve != nil && args[0] != "run" {
 		if _, ok := profiles[args[0]]; !ok {
 			fmt.Fprintln(os.Stderr, "waldo: --observe 只用于 Agent 或 run")
+			return 2
+		}
+	}
+	if withExecMode != "" && args[0] != "run" {
+		if _, ok := profiles[args[0]]; !ok {
+			fmt.Fprintln(os.Stderr, "waldo: --exec-mode 只用于 Agent 或 run")
 			return 2
 		}
 	}
@@ -106,7 +112,7 @@ func Main(args []string) int {
 		}
 		return session.DevSandbox(cfg, a)
 	case "run":
-		a, paseo, observe, err := wrapperPrefix(args[1:])
+		a, paseo, observe, execMode, err := wrapperPrefix(args[1:])
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "waldo: %v\n", err)
 			return 2
@@ -125,10 +131,13 @@ func Main(args []string) int {
 		if observe == nil {
 			observe = withObserve
 		}
-		return session.Run(session.Options{Config: cfg, Profile: profile.Empty(a[0]), Args: a[1:], Observe: observe})
+		if execMode == "" {
+			execMode = withExecMode
+		}
+		return session.Run(session.Options{Config: cfg, Profile: profile.Empty(a[0]), Args: a[1:], Observe: observe, ExecMode: execMode})
 	}
 	if p, ok := profiles[args[0]]; ok {
-		agentArgs, enabled, observe, err := wrapperPrefix(args[1:])
+		agentArgs, enabled, observe, execMode, err := wrapperPrefix(args[1:])
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "waldo: %v\n", err)
 			return 2
@@ -136,7 +145,10 @@ func Main(args []string) int {
 		if observe == nil {
 			observe = withObserve
 		}
-		return session.Run(session.Options{Config: cfg, Profile: p, Args: agentArgs, Paseo: withPaseo || enabled, Observe: observe})
+		if execMode == "" {
+			execMode = withExecMode
+		}
+		return session.Run(session.Options{Config: cfg, Profile: p, Args: agentArgs, Paseo: withPaseo || enabled, Observe: observe, ExecMode: execMode})
 	}
 	fmt.Fprintf(os.Stderr, "waldo: 未知命令或 Agent %q（waldo help 查看用法；任意命令请用 waldo run -- %s）\n", args[0], args[0])
 	return 2
@@ -144,9 +156,10 @@ func Main(args []string) int {
 
 // Only consume wrapper flags before agent arguments. Literal --paseo or
 // --observe supplied after -p or -- remain agent arguments.
-func wrapperPrefix(args []string) ([]string, bool, *bool, error) {
+func wrapperPrefix(args []string) ([]string, bool, *bool, string, error) {
 	paseo := false
 	var observe *bool
+	execMode := ""
 	for len(args) > 0 {
 		switch args[0] {
 		case "--paseo":
@@ -157,15 +170,32 @@ func wrapperPrefix(args []string) ([]string, bool, *bool, error) {
 		case "--observe=true", "--observe=false":
 			enabled := args[0] == "--observe=true"
 			observe = &enabled
-		default:
-			if strings.HasPrefix(args[0], "--observe=") {
-				return nil, false, nil, fmt.Errorf("--observe expects true or false")
+		case "--exec-mode":
+			if len(args) < 2 {
+				return nil, false, nil, "", fmt.Errorf("--exec-mode 缺少 host 或 remote")
 			}
-			return args, paseo, observe, nil
+			execMode = args[1]
+			if err := config.ValidateExecMode(execMode); err != nil {
+				return nil, false, nil, "", err
+			}
+			args = args[1:]
+		default:
+			if value, ok := strings.CutPrefix(args[0], "--exec-mode="); ok {
+				if err := config.ValidateExecMode(value); err != nil {
+					return nil, false, nil, "", err
+				}
+				execMode = value
+				args = args[1:]
+				continue
+			}
+			if strings.HasPrefix(args[0], "--observe=") {
+				return nil, false, nil, "", fmt.Errorf("--observe expects true or false")
+			}
+			return args, paseo, observe, execMode, nil
 		}
 		args = args[1:]
 	}
-	return args, paseo, observe, nil
+	return args, paseo, observe, execMode, nil
 }
 
 func setup(cfg *config.Config, args []string) int {

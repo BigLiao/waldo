@@ -168,6 +168,9 @@ func (h *host) capsuleArgs(agentHome string, mnts []string, stubs map[string]str
 			a = append(a, "--ro-bind", d, d)
 		}
 	}
+	if hl.ExecMode == proto.ExecRemote {
+		a = append(a, remoteRuntimeArgs()...)
+	}
 	for _, f := range etcFiles {
 		src := "/etc/" + f
 		if real, err := filepath.EvalSymlinks(src); err == nil {
@@ -285,6 +288,12 @@ func (h *host) agentEnv() []string {
 		k, v, _ := strings.Cut(e, "=")
 		env = util.EnvSet(env, k, v)
 	}
+	if hl.ExecMode == proto.ExecRemote {
+		// A's toolchain locations may be missing or incompatible on B.
+		env = util.EnvFilter(env, remoteToolchainVar)
+		env = util.EnvSet(env, "PATH", "/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin")
+		env = util.EnvSet(env, "SHELL", "/bin/bash")
+	}
 	cwd := hl.Cwd
 	if cwd == "" {
 		cwd = hl.Project
@@ -315,6 +324,11 @@ func (h *host) handleStub(c net.Conn) {
 	var hd proto.Header
 	if err := proto.ReadMsg(c, &hd); err != nil || hd.Kind != proto.KindExec || hd.Exec == nil {
 		return
+	}
+	if h.hello.ExecMode == proto.ExecRemote {
+		// MCP commands start in A's original sandbox environment. Never send
+		// B's PATH, model credentials or agent-specific environment back to A.
+		hd.Exec.Env = append([]string(nil), h.hello.Facts.Env...)
 	}
 	hd.Exec.Env = util.EnvFilter(hd.Exec.Env, func(k string) bool {
 		return strings.HasPrefix(k, "WALDO_") || h.scrub[k]

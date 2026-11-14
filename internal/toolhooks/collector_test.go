@@ -55,6 +55,8 @@ func TestHTTPHooksLogOnlyTimingAndStopWithSession(t *testing.T) {
 	post(`{"session_id":"agent-a","tool_use_id":"call-1","tool_name":"Bash","hook_event_name":"PreToolUse","tool_input":{"command":"private-command"},"transcript_path":"private-path"}`)
 	post(`{"session_id":"agent-a","tool_use_id":"call-1","tool_name":"Bash","hook_event_name":"PostToolUse","duration_ms":12.5,"tool_response":{"stdout":"private-output"}}`)
 	post(`{"session_id":"agent-a","tool_use_id":"call-2","tool_name":"Read","hook_event_name":"PostToolUseFailure","duration_ms":0,"is_interrupt":true,"error":"private-error"}`)
+	post(`{"session_id":"agent-a","tool_use_id":"call-3","tool_name":"mcp__waldo_host__host_bash","hook_event_name":"PreToolUse","tool_input":{"command":"private-command"}}`)
+	post(`{"session_id":"agent-a","tool_use_id":"call-3","tool_name":"mcp__waldo_host__host_bash","hook_event_name":"PostToolUse","duration_ms":42}`)
 	c.Close()
 	c.Close()
 	data, err := os.ReadFile(filepath.Join(dir, "tool-timing.jsonl"))
@@ -65,7 +67,7 @@ func TestHTTPHooksLogOnlyTimingAndStopWithSession(t *testing.T) {
 		t.Fatal("content or endpoint leaked to timing log")
 	}
 	rows := readRecords(t, data)
-	if len(rows) != 3 || rows[0].Kind != "tool-start" || rows[1].Kind != "tool-end" || rows[1].Session != "waldo-session" || rows[1].Agent != "agent-a" {
+	if len(rows) != 5 || rows[0].Kind != "tool-start" || rows[1].Kind != "tool-end" || rows[1].Session != "waldo-session" || rows[1].Agent != "agent-a" {
 		t.Fatalf("unexpected rows: %+v", rows)
 	}
 	if rows[1].Duration == nil || *rows[1].Duration != 12.5 || rows[1].HookElapsed == nil || rows[1].Matched == nil || !*rows[1].Matched {
@@ -73,6 +75,9 @@ func TestHTTPHooksLogOnlyTimingAndStopWithSession(t *testing.T) {
 	}
 	if rows[2].Status != "interrupted" || rows[2].Duration == nil || *rows[2].Duration != 0 || rows[2].HookElapsed != nil || *rows[2].Matched {
 		t.Fatalf("invented interval for unmatched completion: %+v", rows[2])
+	}
+	if rows[4].Tool != "mcp__waldo_host__host_bash" || rows[4].Kind != "tool-end" || rows[4].Duration == nil || *rows[4].Duration != 42 || rows[4].HookElapsed == nil {
+		t.Fatalf("lost MCP tool timing: %+v", rows[4])
 	}
 	if resp, err := client.Post(c.URL, "application/json", strings.NewReader(`{}`)); err == nil {
 		resp.Body.Close()

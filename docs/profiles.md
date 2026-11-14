@@ -11,7 +11,7 @@
 | `scrub` | 凭证类变量：保留在 B 上的 Agent 环境里，但绝不随命令带到 A |
 | `needs` | `waldo doctor` 在 A 上检查的命令 |
 | `state` | Agent 在 B 上的状态路径（`~/` 开头）：doctor 据此判断是否已登录；`waldo setup` 默认把其中已存在的**目录**绑定进胶囊（与 B 上原生 Agent 共用），**文件**首次复制到胶囊 HOME，已有非空副本保留（单文件绑定会让 rename 覆盖失败） |
-| `mcp_config_flag` | `--paseo` 使用的 MCP 配置参数；目前支持 Claude 风格的 `--mcp-config` JSON/文件参数 |
+| `mcp_config_flag` | `--paseo` 和远端命令模式使用的 MCP 配置参数；目前支持 Claude 风格的 `--mcp-config` JSON/文件参数 |
 | `skill_dir` | `--paseo` 只读投影已安装 Paseo skills 的目标目录，例如 `~/.claude/skills` |
 | `telemetry` | 通过配置或 `--observe` 启用的原生遥测适配器：`"claude"`、`"codex"` 或 `"none"`；内置 profile 已配置，自定义 profile 未配置时只记录命令和文件请求 |
 | `tool_hooks` | `--observe` 启用的 B 侧公开工具 hook 适配器：目前为 `"claude"`；`"none"` 关闭工具 hooks，不影响模型统计 |
@@ -43,7 +43,7 @@ state  = ["~/.codex"]
 
 - ELF 二进制：解析符号链接后只读绑定到 `/run/waldo/agent/<名字>` 再执行。
 - `#!` 脚本（例如 npm 安装的 node 脚本）：解释器从 **B** 上解析（`/usr/bin/env node` → B 的 node），绑定到 `/run/waldo/agent/interp-<名字>`；脚本所在的 `node_modules` 树按原路径只读绑定。否则解释器会是 stub，Agent 本身就会被转发到 A 去执行。
-- 胶囊里 A 的 PATH 上每个目录都是 stub 目录，所以 Agent 起的任何子进程（包括写死的 `/bin/bash`）都在 A 上运行。Agent 包内部自带的原生二进制（不在 PATH 目录里）仍在 B 上运行。
+- 默认 `host` 模式下，胶囊里 A 的 PATH 上每个目录都是 stub 目录，所以 PATH 子进程（包括写死的 `/bin/bash`）在 A 上运行。Agent 包内部自带的原生二进制仍可在 B 上运行。`remote` 模式改为绑定 B 的标准工具目录；只有显式调用 `host_bash` MCP 才将命令转发 A，详见[命令执行模式](configuration.md#命令执行模式)。
 
 ## 实测记录
 
