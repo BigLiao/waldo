@@ -445,7 +445,14 @@ func TestHostStderrFiltered(t *testing.T) {
 	}
 	ver, _ := exec.Command(e.Bin, "version").Output()
 	evil := fmt.Sprintf("#!/bin/sh\nif [ \"$1\" = version ]; then echo %s; exit 0; fi\nprintf 'EVIL\\033]52;c;ZXZpbA==\\007\\033P+q\\033\\\\TEXT\\n' >&2\nexit 1\n", strings.TrimSpace(string(ver)))
-	if err := os.WriteFile(filepath.Join(e.BData, "bin", "waldo"), []byte(evil), 0o755); err != nil {
+	// A detached reconnect host may still execute the installed inode while
+	// it finishes cleanup. Replace it atomically, as the installer does.
+	target := filepath.Join(e.BData, "bin", "waldo")
+	replacement := target + ".test-replacement"
+	if err := os.WriteFile(replacement, []byte(evil), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(replacement, target); err != nil {
 		t.Fatal(err)
 	}
 	cmd := e.Cmd("run", "--", "/bin/true")
