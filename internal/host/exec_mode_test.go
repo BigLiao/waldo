@@ -20,66 +20,70 @@ import (
 )
 
 func TestHostMCPReusesSessionAndKeepsAEnvironment(t *testing.T) {
-	a, b := net.Pipe()
-	client, err := yamux.Client(a, util.YamuxConfig())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer client.Close()
-	remote, err := yamux.Server(b, util.YamuxConfig())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer remote.Close()
-	h := &host{sess: remote, hello: remoteHello(), scrub: map[string]bool{"ANTHROPIC_API_KEY": true}}
-	h.hello.Facts.Env = append(h.hello.Facts.Env, "ANTHROPIC_API_KEY=must-stay-hidden")
-	socket := filepath.Join(t.TempDir(), "sock")
-	ln, err := net.Listen("unix", socket)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ln.Close()
-	go h.serveStubs(ln)
-	done := make(chan error, 1)
-	go func() {
-		stream, err := client.AcceptStream()
+	for _, mode := range []string{proto.ExecRemote, proto.ExecHostMCP} {
+		a, b := net.Pipe()
+		client, err := yamux.Client(a, util.YamuxConfig())
 		if err != nil {
-			done <- err
-			return
+			t.Fatal(err)
 		}
-		defer stream.Close()
-		stream.SetDeadline(time.Now().Add(3 * time.Second))
-		var header proto.Header
-		if err := proto.ReadMsg(stream, &header); err != nil {
-			done <- err
-			return
+		defer client.Close()
+		remote, err := yamux.Server(b, util.YamuxConfig())
+		if err != nil {
+			t.Fatal(err)
 		}
-		if header.Kind != proto.KindExec || header.Exec == nil {
-			t.Error("did not reuse exec protocol")
-			done <- io.ErrUnexpectedEOF
-			return
+		defer remote.Close()
+		h := &host{sess: remote, hello: remoteHello(), scrub: map[string]bool{"ANTHROPIC_API_KEY": true}}
+		h.hello.ExecMode = mode
+		h.hello.Facts.Env = append(h.hello.Facts.Env, "ANTHROPIC_API_KEY=must-stay-hidden")
+		socket := filepath.Join(t.TempDir(), "sock")
+		ln, err := net.Listen("unix", socket)
+		if err != nil {
+			t.Fatal(err)
 		}
-		path, _ := util.EnvGet(header.Exec.Env, "PATH")
-		if path != "/A/bin" {
-			t.Errorf("B PATH reached A: %v", header.Exec.Env)
+		defer ln.Close()
+		go h.serveStubs(ln)
+		done := make(chan error, 1)
+		go func() {
+			stream, err := client.AcceptStream()
+			if err != nil {
+				done <- err
+				return
+			}
+			defer stream.Close()
+			stream.SetDeadline(time.Now().Add(3 * time.Second))
+			var header proto.Header
+			if err := proto.ReadMsg(stream, &header); err != nil {
+				done <- err
+				return
+			}
+			if header.Kind != proto.KindExec || header.Exec == nil {
+				t.Error("did not reuse exec protocol")
+				done <- io.ErrUnexpectedEOF
+				return
+			}
+			path, _ := util.EnvGet(header.Exec.Env, "PATH")
+			if path != "/A/bin" {
+				t.Errorf("B PATH reached A: %v", header.Exec.Env)
+			}
+			if _, ok := util.EnvGet(header.Exec.Env, "ANTHROPIC_API_KEY"); ok {
+				t.Error("credential reached A")
+			}
+			kind, _, err := proto.ReadFrame(stream)
+			if err != nil || kind != proto.FStdinEOF {
+				done <- io.ErrUnexpectedEOF
+				return
+			}
+			done <- proto.NewFrameWriter(stream).WriteJSON(proto.FExit, proto.Exit{})
+		}()
+		result, err := hostbash.Execute(context.Background(), socket, "/A/bin/bash", "/project", hostbash.Call{Command: "id"})
+		if err != nil || result.ExitCode != 0 {
+			t.Fatalf("MCP over existing session: %+v %v", result, err)
 		}
-		if _, ok := util.EnvGet(header.Exec.Env, "ANTHROPIC_API_KEY"); ok {
-			t.Error("credential reached A")
+		if err := <-done; err != nil {
+			t.Fatal(err)
 		}
-		kind, _, err := proto.ReadFrame(stream)
-		if err != nil || kind != proto.FStdinEOF {
-			done <- io.ErrUnexpectedEOF
-			return
-		}
-		done <- proto.NewFrameWriter(stream).WriteJSON(proto.FExit, proto.Exit{})
-	}()
-	result, err := hostbash.Execute(context.Background(), socket, "/A/bin/bash", "/project", hostbash.Call{Command: "id"})
-	if err != nil || result.ExitCode != 0 {
-		t.Fatalf("MCP over existing session: %+v %v", result, err)
 	}
-	if err := <-done; err != nil {
-		t.Fatal(err)
-	}
+
 }
 
 func remoteHello() proto.Hello {
@@ -165,5 +169,58 @@ func TestRemoteCapsuleExecutesNativeBash(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(h.hello.Project, "written"))
 	if err != nil || string(data) != "remote" {
 		t.Fatalf("project write: %q %v", data, err)
+	}
+}
+
+func TestHostMCPUsesNativeRuntimeAndForwardedGit(t *testing.T) {
+	h := &host{hello: remoteHello()}
+	h.hello.ExecMode = proto.ExecHostMCP
+	h.hello.Argv = []string{"--disallowedTools=WebFetch", "-p", "hello"}
+	if err := h.configureExecMode(); err != nil {
+		t.Fatal(err)
+	}
+	args := strings.Join(h.hello.Argv, " ")
+	for _, want := range []string{"--disallowedTools=Bash,Read,Edit,Write,Glob,Grep,NotebookEdit", "--disallowedTools=WebFetch", "host-bash-mcp"} {
+		if !strings.Contains(args, want) {
+			t.Fatalf("missing %s", want)
+		}
+	}
+	env := h.agentEnv()
+	path, _ := util.EnvGet(env, "PATH")
+	if !strings.HasPrefix(path, forwardPath("/A/bin")+":") || !strings.HasSuffix(path, util.NativePath) {
+		t.Fatal("wrong host-mcp PATH")
+	}
+	if _, ok := util.EnvGet(env, "NVM_BIN"); ok {
+		t.Fatal("A toolchain leaked into B runtime")
+	}
+}
+
+func TestHostMCPStubsOnlyForwardGit(t *testing.T) {
+	h := &host{hello: remoteHello(), runDir: t.TempDir()}
+	h.hello.ExecMode = proto.ExecHostMCP
+	h.hello.Facts.PathDirs = []proto.PathDir{{Dir: "/usr/bin", Real: "/usr/bin", Names: []string{"git", "sh", "bash", "env", "python3"}, OnPath: true}}
+	stubs, e := h.makeStubs()
+	if e != nil {
+		t.Fatal(e)
+	}
+	files, e := os.ReadDir(stubs["/usr/bin"])
+	if e != nil || len(files) != 1 || files[0].Name() != "git" {
+		t.Fatal(files, e)
+	}
+}
+
+func TestMCPStartupTimeoutPreservesExplicitSettings(t *testing.T) {
+	h := &host{hello: remoteHello()}
+	h.hello.ExecMode = proto.ExecHostMCP
+	if value, _ := util.EnvGet(h.agentEnv(), "MCP_TIMEOUT"); value != "180000" {
+		t.Fatal(value)
+	}
+	h.hello.Facts.Env = append(h.hello.Facts.Env, "MCP_TIMEOUT=45000")
+	if value, _ := util.EnvGet(h.agentEnv(), "MCP_TIMEOUT"); value != "45000" {
+		t.Fatal("overrode caller timeout", value)
+	}
+	h.hello.Profile.Env = map[string]string{"MCP_TIMEOUT": "90000"}
+	if value, _ := util.EnvGet(h.agentEnv(), "MCP_TIMEOUT"); value != "90000" {
+		t.Fatal("overrode profile timeout", value)
 	}
 }

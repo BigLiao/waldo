@@ -112,7 +112,6 @@ func serveReconnect(dataDir, token string, window time.Duration) int {
 	h := &host{dataDir: dataDir}
 	link := reconnect.New(window)
 	link.State = func(up bool) {
-		h.cacheConnectionState(up)
 		log.Printf("reconnect attached=%t", up)
 	}
 	defer link.Close()

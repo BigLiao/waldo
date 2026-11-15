@@ -47,7 +47,7 @@ func TestConfigPreservesExistingServersAndLiteralArguments(t *testing.T) {
 func TestConfigRejectsReservedNameAndInvalidInput(t *testing.T) {
 	for _, args := range [][]string{
 		{"--mcp-config"}, {"--mcp-config", "/nonexistent/config.json"},
-		{"--mcp-config", `{"mcpServers":{"waldo_host":{}}}`},
+		{"--mcp-config", `{"mcpServers":{"waldo":{}}}`},
 		{"--mcp-config", `{"mcpServers":null}`}, {"--mcp-config", `{broken`},
 	} {
 		if _, err := Configs(args); err == nil {
@@ -66,5 +66,20 @@ func TestDiscoveryCommandsDoNotReceiveAgentOnlyMCPFlags(t *testing.T) {
 		if IsProbe(args) {
 			t.Fatalf("misclassified agent arguments: %v", args)
 		}
+	}
+}
+
+func TestDisableHostToolsPreservesArguments(t *testing.T) {
+	for _, args := range [][]string{{"--version"}, {"auth", "status"}} {
+		got := DisableHostTools(args)
+		if !reflect.DeepEqual(got, args) {
+			t.Fatalf("changed probe: %v", got)
+		}
+	}
+	args := []string{"--disallowedTools=Edit", "--", "prompt"}
+	got := DisableHostTools(args)
+	want := append([]string{"--disallowedTools=Bash,Read,Edit,Write,Glob,Grep,NotebookEdit"}, args...)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("lost arguments: %v", got)
 	}
 }

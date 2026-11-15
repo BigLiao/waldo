@@ -10,11 +10,11 @@ import (
 	"github.com/pkg/sftp"
 )
 
-// Serve routes only virtual files and project-root directory listings to a
+// serveNative routes only virtual files and project-root directory listings to a
 // read-only RequestServer. All other packets go unchanged to the original OS
 // server, preserving its creation permissions, handle semantics and extensions.
 // Both protocol parsers remain inside the existing A sandbox.
-func (v *View) Serve(st io.ReadWriteCloser) error {
+func (v *View) serveNative(st io.ReadWriteCloser) error {
 	defer st.Close()
 	if v == nil || len(v.files) == 0 {
 		s, err := sftp.NewServer(st)

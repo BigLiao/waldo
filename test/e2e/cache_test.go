@@ -24,6 +24,10 @@ func TestContentCacheFreshness(t *testing.T) {
 	if err := os.WriteFile(source, []byte("aaaa"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	stamp := time.Unix(1700000000, 123456100)
+	if err := os.Chtimes(source, stamp, stamp); err != nil {
+		t.Fatal(err)
+	}
 	original, err := os.Stat(source)
 	if err != nil {
 		t.Fatal(err)
@@ -68,9 +72,17 @@ func TestContentCacheFreshness(t *testing.T) {
 		}
 		seen[phase] = true
 		switch phase {
+		case "edit":
+			if err := os.WriteFile(source, []byte("eeee"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			changed := original.ModTime().Add(100 * time.Nanosecond)
+			if err := os.Chtimes(source, changed, changed); err != nil {
+				t.Fatal(err)
+			}
 		case "replace":
-			// Same size and timestamp: invalidation must not rely on merely
-			// noticing different cached size/mtime values on the remote end.
+			// Same size and timestamp: inode identity must detect an atomic
+			// replacement even though the high-precision mtime is preserved.
 			tmp := filepath.Join(e.Project, "cache-replacement")
 			if err := os.WriteFile(tmp, []byte("bbbb"), 0o600); err != nil {
 				t.Fatal(err)
@@ -106,12 +118,12 @@ func TestContentCacheFreshness(t *testing.T) {
 		t.Fatalf("content cache probe: %v\n%s\nstderr:\n%s", err, output.String(), stderr.String())
 	}
 	results := parseResults(output.String())
-	for _, name := range []string{"external_replace", "write_then_read", "exec_then_read", "external_rename", "external_delete", "ok"} {
+	for _, name := range []string{"external_replace", "external_edit", "write_then_read", "exec_then_read", "external_rename", "external_delete", "ok"} {
 		if results["cache_"+name] != "true" {
 			t.Errorf("cache_%s = %q\n%s", name, results["cache_"+name], output.String())
 		}
 	}
-	for _, phase := range []string{"replace", "rename", "delete"} {
+	for _, phase := range []string{"replace", "edit", "rename", "delete"} {
 		if !seen[phase] {
 			t.Errorf("missing external modification phase %q", phase)
 		}
@@ -120,8 +132,8 @@ func TestContentCacheFreshness(t *testing.T) {
 	if err != nil || !strings.Contains(string(log), "content_cache_ttl=60s") {
 		t.Errorf("content cache proxy was not mounted: %v\n%s", err, log)
 	}
-	if log, err := os.ReadFile(filepath.Join(e.AData, "log", "sandbox.log")); err != nil || strings.Contains(string(log), "file cache disabled") {
-		t.Errorf("project watcher did not remain enabled: %v\n%s", err, log)
+	if log, err := os.ReadFile(filepath.Join(e.AData, "audit.log")); err != nil || strings.Contains(string(log), `"kind":"fs-watch"`) {
+		t.Errorf("passive cache used notifications: %v", err)
 	}
 	waitNoMounts(t)
 }

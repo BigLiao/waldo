@@ -10,7 +10,7 @@ import (
 
 // cacheProbe deliberately synchronizes external changes over stdio. No
 // forwarded command runs between warming a file and observing those changes,
-// so freshness there depends on the watcher rather than the exec barrier.
+// so freshness depends on per-open validation, without a watcher or barrier.
 func cacheProbe() error {
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -62,6 +62,15 @@ func cacheProbe() error {
 		return err
 	}
 	if err := warm(source, "bbbb"); err != nil {
+		return err
+	}
+	if err := handshake("edit"); err != nil {
+		return err
+	}
+	if err := await("external_edit", func() bool { return contents(source, "eeee") }); err != nil {
+		return err
+	}
+	if err := warm(source, "eeee"); err != nil {
 		return err
 	}
 	if err := os.WriteFile(source, []byte("cccc"), 0o600); err != nil {

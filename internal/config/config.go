@@ -322,8 +322,8 @@ func (c *Config) PolicyFor(project string) (*Policy, error) {
 }
 
 func ValidateExecMode(mode string) error {
-	if mode != proto.ExecHost && mode != proto.ExecRemote {
-		return fmt.Errorf("execution.mode: expected host or remote, got %q", mode)
+	if mode != proto.ExecHost && mode != proto.ExecRemote && mode != proto.ExecHostMCP {
+		return fmt.Errorf("execution.mode: expected host, remote or host-mcp, got %q", mode)
 	}
 	return nil
 }

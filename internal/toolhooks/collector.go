@@ -26,6 +26,8 @@ const (
 // Input deliberately has no tool input, tool output, error text or paths.
 // Unknown fields in the public hook payload are consumed but never retained.
 type input struct {
+	Location  string   `json:"location"`
+	Status    string   `json:"status"`
 	Event     string   `json:"hook_event_name"`
 	Session   string   `json:"session_id"`
 	Call      string   `json:"tool_use_id"`
@@ -36,6 +38,7 @@ type input struct {
 }
 
 type record struct {
+	Location    string   `json:"location,omitempty"`
 	Time        string   `json:"t"`
 	Session     string   `json:"s"`
 	Kind        string   `json:"kind"`
@@ -142,7 +145,11 @@ func validInput(in input) bool {
 	if !validID(in.Session) || !validID(in.Call) || !validID(in.Tool) {
 		return false
 	}
-	if in.Event != "PreToolUse" && in.Event != "PostToolUse" && in.Event != "PostToolUseFailure" {
+	if in.Event == "WaldoToolExecution" {
+		if (in.Location != "host" && in.Location != "agent") || (in.Status != "completed" && in.Status != "failed") || in.Duration == nil {
+			return false
+		}
+	} else if in.Event != "PreToolUse" && in.Event != "PostToolUse" && in.Event != "PostToolUseFailure" {
 		return false
 	}
 	return in.Duration == nil || (!math.IsNaN(*in.Duration) && !math.IsInf(*in.Duration, 0) && *in.Duration >= 0 && *in.Duration <= 1e12)
@@ -175,7 +182,10 @@ func (c *Collector) writeLoop(w io.WriteCloser) {
 	for in := range c.queue {
 		key := callKey{in.Session, in.Call}
 		r := record{Time: in.at.Format(time.RFC3339Nano), Agent: in.Session, Call: in.Call, Tool: in.Tool}
-		if in.Event == "PreToolUse" {
+		if in.Event == "WaldoToolExecution" {
+			r.Kind, r.Status, r.Duration, r.Location = "tool-execution", in.Status, in.Duration, in.Location
+			r.Agent = "" // The MCP does not know the native Claude session/call IDs.
+		} else if in.Event == "PreToolUse" {
 			r.Kind = "tool-start"
 			if _, exists := pending[key]; !exists && len(pending) < maxPending {
 				pending[key] = in

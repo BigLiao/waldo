@@ -5,14 +5,26 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
+	"strings"
 	"sync"
+	"waldo/internal/hosttools"
 )
 
 type Call struct {
-	Command   string `json:"command"`
-	Cwd       string `json:"cwd,omitempty"`
-	TimeoutMS int    `json:"timeout_ms,omitempty"`
+	Tool           string          `json:"-"`
+	Arguments      json.RawMessage `json:"-"`
+	Command        string          `json:"command"`
+	Cwd            string          `json:"cwd,omitempty"`
+	TimeoutMS      int             `json:"timeout,omitempty"`
+	Description    string          `json:"description,omitempty"`
+	Location       string          `json:"location,omitempty"`
+	Background     bool            `json:"run_in_background,omitempty"`
+	DisableSandbox bool            `json:"dangerouslyDisableSandbox,omitempty"`
+	TaskID         string          `json:"task_id,omitempty"`
+	ShellID        string          `json:"shell_id,omitempty"`
+	Block          *bool           `json:"block,omitempty"`
 }
 
 type Result struct {
@@ -21,6 +33,9 @@ type Result struct {
 	ExitCode  int    `json:"exit_code"`
 	Signal    int    `json:"signal,omitempty"`
 	Truncated bool   `json:"truncated,omitempty"`
+	Location  string `json:"location,omitempty"`
+	TaskID    string `json:"task_id,omitempty"`
+	Running   bool   `json:"running,omitempty"`
 }
 
 type Runner func(context.Context, Call) (Result, error)
@@ -35,7 +50,8 @@ type request struct {
 // Serve implements the small stdio MCP surface needed for one synchronous
 // tool. Calls run concurrently so cancellation remains readable on stdin.
 // EOF cancels active commands; stdout contains only JSON-RPC messages.
-func Serve(parent context.Context, in io.Reader, out io.Writer, run Runner) error {
+func Serve(parent context.Context, in io.Reader, out io.Writer, run Runner, fileTools ...bool) error {
+	files := len(fileTools) > 0 && fileTools[0]
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 	var writes, mu sync.Mutex
@@ -110,26 +126,44 @@ func Serve(parent context.Context, in io.Reader, out io.Writer, run Runner) erro
 			default:
 				version = "2025-11-25"
 			}
-			reply(req.ID, map[string]any{"protocolVersion": version, "capabilities": map[string]any{"tools": map[string]any{}}, "serverInfo": map[string]string{"name": "waldo-host-bash", "version": "1.0.0"}}, 0, "")
+			reply(req.ID, map[string]any{"protocolVersion": version, "capabilities": map[string]any{"tools": map[string]any{}}, "serverInfo": map[string]string{"name": "waldo", "version": "1.0.0"}}, 0, "")
 		case "ping":
 			reply(req.ID, map[string]any{}, 0, "")
 		case "tools/list":
-			reply(req.ID, map[string]any{"tools": []any{toolDefinition()}}, 0, "")
+			defs := []any{toolDefinition()}
+			if files {
+				defs = append(defs, hosttools.Definitions()...)
+
+			}
+			defs = append(defs, taskDefinitions()...)
+			reply(req.ID, map[string]any{"tools": defs}, 0, "")
 		case "tools/call":
 			var p struct {
 				Name      string          `json:"name"`
 				Arguments json.RawMessage `json:"arguments"`
 			}
 			var call Call
-			if json.Unmarshal(req.Params, &p) != nil || p.Name != ToolName {
+			if json.Unmarshal(req.Params, &p) != nil || (p.Name != ToolName && !(files && hosttools.Known(p.Name)) && p.Name != "TaskOutput" && p.Name != "TaskStop") {
 				reply(req.ID, nil, -32602, "Unknown tool or invalid params")
 				continue
 			}
-			d := json.NewDecoder(bytes.NewReader(p.Arguments))
-			d.DisallowUnknownFields()
-			if d.Decode(&call) != nil || !validCall(call) {
-				reply(req.ID, nil, -32602, "Expected command, optional absolute cwd and timeout_ms (1..600000)")
-				continue
+			if p.Name == ToolName || p.Name == "TaskOutput" || p.Name == "TaskStop" {
+				d := json.NewDecoder(bytes.NewReader(p.Arguments))
+				d.DisallowUnknownFields()
+				if d.Decode(&call) != nil || validateCallFields(p.Name, p.Arguments) != nil || (p.Name == ToolName && !validCall(call)) {
+					reply(req.ID, nil, -32602, "Expected native Bash arguments (command, timeout, description, run_in_background), plus location")
+					continue
+				}
+				if p.Name != ToolName {
+					call.Tool = p.Name
+				}
+			} else {
+				if _, err := hosttools.DecodePublic(p.Name, p.Arguments); err != nil {
+					reply(req.ID, nil, -32602, err.Error())
+					continue
+				}
+				call.Tool = p.Name
+				call.Arguments = p.Arguments
 			}
 			select {
 			case slots <- struct{}{}:
@@ -159,7 +193,7 @@ func Serve(parent context.Context, in io.Reader, out io.Writer, run Runner) erro
 				if err != nil {
 					text, _ = json.Marshal(map[string]any{"error": err.Error(), "output": res})
 				}
-				reply(req.ID, map[string]any{"content": []any{map[string]string{"type": "text", "text": string(text)}}, "isError": failed}, 0, "")
+				reply(req.ID, map[string]any{"content": resultContent(res, text), "isError": failed}, 0, "")
 			}(req, call)
 		default:
 			reply(req.ID, nil, -32601, "Method not found")
@@ -171,20 +205,56 @@ func Serve(parent context.Context, in io.Reader, out io.Writer, run Runner) erro
 }
 
 func validCall(c Call) bool {
-	return len(c.Command) > 0 && len(c.Command) <= 1<<20 && !bytes.ContainsRune([]byte(c.Command), 0) &&
-		(c.Cwd == "" || (c.Cwd[0] == '/' && !bytes.ContainsRune([]byte(c.Cwd), 0))) && c.TimeoutMS >= 0 && c.TimeoutMS <= 600000
+	maxTimeout := 600000
+	if c.Background {
+		maxTimeout = 7200000
+	}
+	return c.Command != "" && len(c.Command) <= 1<<20 && !strings.ContainsRune(c.Command, 0) && c.TimeoutMS >= 0 && c.TimeoutMS <= maxTimeout && (c.Location == "" || c.Location == "auto" || c.Location == "host" || c.Location == "agent")
+}
+func toolDefinition() any {
+	return map[string]any{"name": ToolName, "description": "Run a Bash command. Parameters follow Claude Bash, with optional location: host (default/auto) runs in A sandbox; agent runs in B sandbox with B tools and local /tmp. description is explanatory only. Environment variables and cwd do not persist between calls; use absolute paths or cd within the command. Background jobs are owned by this MCP session: poll with its TaskOutput and cancel with its TaskStop. No automatic model wake-up. Sandboxing cannot be disabled.", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{
+		"command": map[string]any{"type": "string"}, "timeout": map[string]any{"type": "number", "minimum": 1, "maximum": 7200000}, "description": map[string]any{"type": "string"}, "run_in_background": map[string]any{"type": "boolean"}, "dangerouslyDisableSandbox": map[string]any{"type": "boolean"}, "location": hosttools.LocationSchema(),
+	}, "required": []string{"command"}, "additionalProperties": false}}
 }
 
-func toolDefinition() any {
-	return map[string]any{
-		"name": ToolName,
-		"description": `在本机 A 的 Waldo 沙箱中执行 Bash 命令。适用于需要本机依赖、虚拟环境、操作系统、构建测试环境或本机服务的任务。
-普通文件处理、文本搜索和使用远端已有工具运行的脚本，优先使用内置 Bash，在远端 B 执行。
-两种方式操作同一份项目文件，写入都会影响本机工作区。本工具返回 stdout、stderr 和退出码，不支持交互输入或跨调用保留 Shell 状态。每路输出最多返回 128 KiB，超过时标记截断。`,
-		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
-			"command":    map[string]any{"type": "string", "minLength": 1, "maxLength": 1 << 20},
-			"cwd":        map[string]string{"type": "string", "description": "本机绝对路径；默认启动会话时的工作目录。"},
-			"timeout_ms": map[string]any{"type": "integer", "minimum": 1, "maximum": 600000, "default": 120000},
-		}, "required": []string{"command"}, "additionalProperties": false},
+// Images are separate MCP content blocks, never duplicated in JSON text.
+func resultContent(res Result, text []byte) []any {
+	var value map[string]json.RawMessage
+	if json.Unmarshal([]byte(res.Stdout), &value) == nil && value["image"] != nil {
+		var img map[string]any
+		if json.Unmarshal(value["image"], &img) == nil {
+			delete(value, "image")
+			b, _ := json.Marshal(value)
+			res.Stdout = string(b)
+			text, _ = json.Marshal(res)
+			return []any{map[string]string{"type": "text", "text": string(text)}, img}
+		}
 	}
+	return []any{map[string]string{"type": "text", "text": string(text)}}
+}
+
+func validateCallFields(name string, raw []byte) error {
+	allowed := map[string]bool{"location": true}
+	var names []string
+	switch name {
+	case ToolName:
+		names = []string{"command", "timeout", "description", "run_in_background", "dangerouslyDisableSandbox"}
+	case "TaskOutput":
+		names = []string{"task_id", "block", "timeout"}
+	case "TaskStop":
+		names = []string{"task_id", "shell_id"}
+	}
+	for _, key := range names {
+		allowed[key] = true
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return err
+	}
+	for key, value := range fields {
+		if !allowed[key] || string(value) == "null" {
+			return fmt.Errorf("invalid argument %s", key)
+		}
+	}
+	return nil
 }

@@ -2,6 +2,7 @@ package hostbash
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
@@ -100,5 +101,46 @@ func TestExecuteDoesNotTreatLostChannelAsSuccess(t *testing.T) {
 	result, err := Execute(context.Background(), socket, "/bin/bash", "/project", Call{Command: "id"})
 	if err == nil || result.ExitCode != 255 {
 		t.Fatalf("lost channel reported success: %+v %v", result, err)
+	}
+}
+
+func TestFileToolArgumentsUseStdinAndKeepAttribution(t *testing.T) {
+	raw, _ := json.Marshal(map[string]any{"path": "/project/private.txt", "content": strings.Repeat("secret$()", 10000)})
+	socket := execSocket(t, func(c net.Conn) {
+		var header proto.Header
+		if e := proto.ReadMsg(c, &header); e != nil {
+			t.Error(e)
+			return
+		}
+		req := header.Exec
+		if req.Tool != "Write" || req.Path != "/run/waldo/waldo" || strings.Join(req.Argv, " ") != "/run/waldo/waldo host-file-tool Write" {
+			t.Errorf("bad request: %+v", req)
+		}
+		var input []byte
+		for {
+			kind, p, e := proto.ReadFrame(c)
+			if e != nil {
+				t.Error(e)
+				return
+			}
+			if kind == proto.FStdinEOF {
+				break
+			}
+			if kind != proto.FStdin {
+				t.Error("bad frame")
+				return
+			}
+			input = append(input, p...)
+		}
+		if string(input) != string(raw) {
+			t.Error("arguments changed")
+		}
+		fw := proto.NewFrameWriter(c)
+		fw.Write(proto.FStdout, []byte(`{"bytes":80000}`))
+		fw.WriteJSON(proto.FExit, proto.Exit{})
+	})
+	result, e := Execute(context.Background(), socket, "/bin/bash", "/project", Call{Tool: "Write", Arguments: raw})
+	if e != nil || result.ExitCode != 0 || result.Truncated {
+		t.Fatal(result, e)
 	}
 }

@@ -1,6 +1,7 @@
 package host
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"log"
 	"os"
@@ -12,7 +13,7 @@ import (
 	"waldo/internal/util"
 )
 
-// configureExecMode does not grant any new access to A: host_bash speaks the
+// configureExecMode does not grant any new access to A: Bash speaks the
 // same exec protocol as a command stub and runs under the same A sandbox.
 func (h *host) configureExecMode() error {
 	if h.hello.ExecMode == "" {
@@ -21,13 +22,13 @@ func (h *host) configureExecMode() error {
 	if h.hello.ExecMode == proto.ExecHost {
 		return nil
 	}
-	if h.hello.ExecMode != proto.ExecRemote {
+	if h.hello.ExecMode != proto.ExecRemote && h.hello.ExecMode != proto.ExecHostMCP {
 		return fmt.Errorf("invalid exec mode %q", h.hello.ExecMode)
 	}
 	if h.hello.Profile.MCPConfigFlag != "--mcp-config" {
-		return fmt.Errorf("remote execution requires an MCP-capable profile")
+		return fmt.Errorf("MCP execution requires an MCP-capable profile")
 	}
-	if !util.Exists("/bin/bash") {
+	if h.hello.ExecMode == proto.ExecRemote && !util.Exists("/bin/bash") {
 		return fmt.Errorf("remote execution requires /bin/bash on B")
 	}
 	shell := ""
@@ -46,15 +47,18 @@ func (h *host) configureExecMode() error {
 		}
 	}
 	if shell == "" {
-		return fmt.Errorf("host_bash requires bash on A's sandbox PATH")
+		return fmt.Errorf("Bash requires bash on A's sandbox PATH")
 	}
 	cwd := h.hello.Cwd
 	if cwd == "" {
 		cwd = h.hello.Project
 	}
 	args := append(append([]string(nil), h.hello.Profile.Args...), h.hello.Argv...)
-	h.hello.Profile.Args, h.hello.Argv = nil, hostbash.Inject(args, shell, cwd)
-	log.Printf("session %s: exec_mode=remote; host_bash uses existing sandbox channel", h.hello.Session)
+	h.hello.Profile.Args, h.hello.Argv = nil, hostbash.Inject(args, shell, cwd, h.hello.ExecMode == proto.ExecHostMCP)
+	if h.hello.ExecMode == proto.ExecHostMCP {
+		h.hello.Argv = hostbash.DisableHostTools(h.hello.Argv)
+	}
+	log.Printf("session %s: exec_mode=%s; Bash uses existing sandbox channel", h.hello.Session, h.hello.ExecMode)
 	return nil
 }
 
@@ -79,9 +83,12 @@ func remoteRuntimeArgs() []string {
 }
 
 func remoteToolchainVar(k string) bool {
-	switch k {
-	case "PATH", "SHELL", "NVM_DIR", "NVM_BIN", "NVM_INC", "VOLTA_HOME", "PNPM_HOME", "BUN_INSTALL", "RUSTUP_HOME", "GOROOT", "PYENV_ROOT", "JAVA_HOME", "SDKMAN_DIR", "MISE_DATA_DIR", "ASDF_DIR", "ASDF_DATA_DIR":
-		return true
-	}
-	return strings.HasPrefix(k, "WALDO_")
+	return util.IsToolchainVar(k) || strings.HasPrefix(k, "WALDO_")
+}
+
+// Keep only Claude's startup Git probes forwarded in host-mcp mode. Native
+// shells and their absolute shebang paths must agree with B's private /tmp.
+func forwardPath(dir string) string {
+	sum := sha256.Sum256([]byte(filepath.Clean(dir)))
+	return fmt.Sprintf("/run/waldo/forward/%x", sum[:8])
 }

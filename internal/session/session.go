@@ -22,6 +22,7 @@ import (
 	"waldo/internal/audit"
 	"waldo/internal/config"
 	"waldo/internal/hostbash"
+	"waldo/internal/hosttools"
 	"waldo/internal/paseo"
 	"waldo/internal/profile"
 	"waldo/internal/proto"
@@ -172,12 +173,12 @@ func Run(o Options) int {
 		warnf("%v", err)
 		return 2
 	}
-	if pol.ExecMode == proto.ExecRemote && o.Profile.MCPConfigFlag != "--mcp-config" {
-		warnf("--exec-mode remote 需要支持 --mcp-config 的 Agent profile（内置 Claude 支持）")
+	if pol.ExecMode != proto.ExecHost && o.Profile.MCPConfigFlag != "--mcp-config" {
+		warnf("--exec-mode remote/host-mcp 需要支持 --mcp-config 的 Agent profile（内置 Claude 支持）")
 		return 2
 	}
 	o.ExecMode = pol.ExecMode
-	if o.ExecMode == proto.ExecRemote {
+	if o.ExecMode != proto.ExecHost {
 		args := append(append([]string(nil), o.Profile.Args...), o.Args...)
 		o.Args, err = hostbash.Configs(args)
 		if err != nil {
@@ -208,14 +209,14 @@ func Run(o Options) int {
 
 	// What B sees through the file projection.
 	mounts := []string{project}
-	if !util.Within(project, "/tmp") {
+	if pol.ExecMode != proto.ExecHostMCP && !util.Within(project, "/tmp") {
 		mounts = append(mounts, "/tmp")
 	}
 	var mkdirs []string
 	mounts = append(mounts, o.readOnlyMounts...)
 	for _, s := range o.Profile.Shared {
 		p := filepath.Clean(util.ExpandHome(s, home))
-		if !filepath.IsAbs(p) || util.Within(p, project) || util.Within(p, "/tmp") {
+		if !filepath.IsAbs(p) || util.Within(p, project) || (pol.ExecMode != proto.ExecHostMCP && util.Within(p, "/tmp")) {
 			continue
 		}
 		mounts = append(mounts, p)
@@ -363,13 +364,12 @@ func runRemote(o Options, host string, sb *Sandbox, id, cwd, project string, mou
 	return code
 }
 
-// acceptFromB serves file projection, project-cache watches and exec streams. A fixed Paseo broker
+// acceptFromB serves file projection and exec streams. A fixed Paseo broker
 // is accepted only when explicitly enabled for this session; arbitrary
 // connection requests remain refused and logged.
 func acceptFromB(bs *yamux.Session, sb *Sandbox, al *audit.Logger, brokers ...*paseo.Broker) {
 	var handlers sync.WaitGroup
 	defer handlers.Wait()
-	var watchActive atomic.Bool
 	var observeActive atomic.Bool
 	var execSeq atomic.Uint64
 	for {
@@ -397,25 +397,6 @@ func acceptFromB(bs *yamux.Session, sb *Sandbox, al *audit.Logger, brokers ...*p
 				}
 				defer observeActive.Store(false)
 				serveModelStats(st, al, sb.ModelTelemetry)
-			case proto.KindFSWatch:
-				if sb.ContentCacheTTL <= 0 || h.Path != sb.Project || h.Exec != nil || h.Host != "" || h.Port != 0 {
-					al.Log("reject", map[string]any{"from": "B", "stream": h.Kind})
-					st.Close()
-					return
-				}
-				if !watchActive.CompareAndSwap(false, true) {
-					al.Log("reject", map[string]any{"from": "B", "stream": h.Kind, "reason": "duplicate cache watch"})
-					st.Close()
-					return
-				}
-				defer watchActive.Store(false)
-				in, err := sb.Open(proto.Header{Kind: proto.KindFSWatch, Path: sb.Project})
-				if err != nil {
-					st.Close()
-					return
-				}
-				al.Log("fs-watch", map[string]any{"path": sb.Project})
-				util.Splice(st, in)
 			case proto.KindPaseo:
 				if len(brokers) == 1 && brokers[0] != nil && h.Host == "" && h.Path == "" && h.Port == 0 && h.Exec == nil {
 					al.Log("paseo-mcp", nil)
@@ -451,7 +432,7 @@ func acceptFromB(bs *yamux.Session, sb *Sandbox, al *audit.Logger, brokers ...*p
 				id, start := execSeq.Add(1), time.Now()
 				// B is untrusted. Keep only the known observational label; it
 				// never changes execution permissions or the target sandbox.
-				if h.Exec.Tool != proto.ToolHostBash {
+				if h.Exec.Tool != proto.ToolHostBash && !hosttools.Known(h.Exec.Tool) {
 					h.Exec.Tool = ""
 				}
 				fields := map[string]any{"id": id, "argv": h.Exec.Argv, "path": h.Exec.Path, "cwd": h.Exec.Cwd}

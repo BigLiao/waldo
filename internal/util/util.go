@@ -154,3 +154,14 @@ func IsProxyVar(key string) bool {
 	}
 	return false
 }
+
+const NativePath = "/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin"
+
+// IsToolchainVar identifies host-specific executable/interpreter configuration.
+func IsToolchainVar(k string) bool {
+	switch k {
+	case "PATH", "SHELL", "NVM_DIR", "NVM_BIN", "NVM_INC", "VOLTA_HOME", "PNPM_HOME", "BUN_INSTALL", "RUSTUP_HOME", "GOROOT", "PYENV_ROOT", "JAVA_HOME", "SDKMAN_DIR", "MISE_DATA_DIR", "ASDF_DIR", "ASDF_DATA_DIR", "VIRTUAL_ENV", "CONDA_PREFIX", "PYTHONHOME", "PYTHONPATH", "LD_LIBRARY_PATH", "LD_PRELOAD":
+		return true
+	}
+	return false
+}

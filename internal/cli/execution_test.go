@@ -11,6 +11,7 @@ func TestExecutionPrefix(t *testing.T) {
 		want    string
 	}{
 		{[]string{"--exec-mode", "remote", "--paseo", "--observe", "-p", "hello"}, []string{"-p", "hello"}, "remote"},
+		{[]string{"--paseo", "--exec-mode=host-mcp", "-p", "hi"}, []string{"-p", "hi"}, "host-mcp"},
 		{[]string{"--paseo", "--exec-mode=remote", "claude"}, []string{"claude"}, "remote"},
 		{[]string{"--exec-mode=remote", "--exec-mode", "host", "-p", "hi"}, []string{"-p", "hi"}, "host"},
 		{[]string{"-p", "--exec-mode=remote"}, []string{"-p", "--exec-mode=remote"}, ""},

@@ -135,7 +135,7 @@ func TestSpliceExecPreservesBytesAndRecordsCompletion(t *testing.T) {
 	if err := json.Unmarshal(data, &event); err != nil {
 		t.Fatal(err)
 	}
-	for key, want := range map[string]any{"kind": "exec-end", "id": float64(42), "program": "bash", "tool": "host_bash", "status": "completed", "exit_code": float64(143), "signal": float64(15)} {
+	for key, want := range map[string]any{"kind": "exec-end", "id": float64(42), "program": "bash", "tool": "Bash", "status": "completed", "exit_code": float64(143), "signal": float64(15)} {
 		if !reflect.DeepEqual(event[key], want) {
 			t.Errorf("%s=%v, want %v", key, event[key], want)
 		}
@@ -214,5 +214,31 @@ func TestExecObservedConnPreservesHalfClose(t *testing.T) {
 	observed := execObservedConn{ReadWriteCloser: probe, observer: &execObserver{}}
 	if err := observed.CloseWrite(); err != nil || !probe.writeClosed || probe.closed {
 		t.Fatalf("half-close changed: writeClosed=%t closed=%t err=%v", probe.writeClosed, probe.closed, err)
+	}
+}
+
+func TestFileToolTimingAttribution(t *testing.T) {
+	for _, tool := range []string{"Read", "Grep", "Glob", "Write", "Edit"} {
+		t.Run(tool, func(t *testing.T) {
+			dir := t.TempDir()
+			logger, e := audit.Open(dir, "file-tools")
+			if e != nil {
+				t.Fatal(e)
+			}
+			start := time.Now()
+			logExecEnd(logger, 1, &proto.ExecReq{Tool: tool, Path: "/run/waldo/waldo"}, start, start.Add(time.Millisecond), "completed", &proto.Exit{})
+			logger.Close()
+			b, e := os.ReadFile(audit.Path(dir))
+			if e != nil {
+				t.Fatal(e)
+			}
+			var event map[string]any
+			if e = json.Unmarshal(b, &event); e != nil {
+				t.Fatal(e)
+			}
+			if event["tool"] != tool || event["duration_ms"] != float64(1) {
+				t.Fatal(event)
+			}
+		})
 	}
 }

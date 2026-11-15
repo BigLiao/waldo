@@ -8,25 +8,9 @@ import (
 	"waldo/internal/proto"
 )
 
-// invalidateCachesBeforeExit is a local causal barrier: another yamux stream
-// closing on A does not prove that B has consumed its final invalidation.
-// Clear all project generations before the stub can observe command completion.
-// Keep the same host -> watch -> cache lock order as connection-state updates;
-// no transport operation is performed while any of these locks are held.
-func (h *host) invalidateCachesBeforeExit() {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	for _, watch := range h.cacheWatches {
-		watch.mu.Lock()
-		watch.cache.Invalidate()
-		watch.mu.Unlock()
-	}
-}
-
-// relayExec preserves the native exec protocol while placing a local cache
-// barrier immediately before FExit. Stdin, EOF, signals and resize frames are
-// copied unchanged. A socket EOF means the stub died, unlike an FStdinEOF frame.
-func relayExec(remote, stub io.ReadWriteCloser, beforeExit func()) {
+// relayExec preserves frames and cancels the remote command when its stub dies.
+// A socket EOF means the stub died, unlike an FStdinEOF frame.
+func relayExec(remote, stub io.ReadWriteCloser) {
 	var stopOnce sync.Once
 	stop := func() {
 		stopOnce.Do(func() {
@@ -57,9 +41,6 @@ func relayExec(remote, stub io.ReadWriteCloser, beforeExit func()) {
 			kind, payload, err := proto.ReadFrame(remote)
 			if err != nil {
 				return
-			}
-			if kind == proto.FExit && beforeExit != nil {
-				beforeExit()
 			}
 			if err := writer.Write(kind, payload); err != nil {
 				return

@@ -121,7 +121,8 @@ waldo link claude
 | `waldo ports` | 查看 Agent 启动的服务转发到了本机哪些端口 |
 | `waldo log` | 回看 Agent 执行过的命令、改过的文件、访问过的网络 |
 | `waldo <agent> --observe` | 追加模型调用统计（Claude / Codex）；Claude 同时在 B 侧记录工具 hook 耗时 |
-| `waldo claude --exec-mode remote` | Bash 在远端执行，需要本机环境时调用注入的 `host_bash` MCP；配置 `[execution] mode = "remote"` 可默认开启，`host` 切回原模式 |
+| `waldo claude --exec-mode host-mcp` | 禁用内置 Bash/Read/Grep/Glob/Edit/Write/NotebookEdit，使用同名 MCP 工具；`location=auto/host/agent` 按路径分发，项目在 A、memory 和临时文件在 B，配置可用 `[execution] mode = "host-mcp"` |
+| `waldo claude --exec-mode remote` | Bash 在远端执行，需要本机环境时调用注入的 `Bash` MCP；配置 `[execution] mode = "remote"` 可默认开启，`host` 切回原模式 |
 | `waldo link <agent>` | 让 `claude` 等命令直接走 waldo |
 
 ## 按需调整
@@ -150,7 +151,7 @@ waldo allow api.example.com
 ## 小贴士
 
 - Agent 工作时，尽量不要同时手动修改它正在改的文件。
-- 项目默认启用带变化通知的 SFTP 读缓存，本机普通文件修改会异步使远端缓存失效；通知传播期间仍可能短暂读到旧内容。特殊文件系统或写入方式可按[配置参考](docs/configuration.md#文件投射性能)关闭缓存。
+- 项目默认按文件缓存已读内容，每次打开时向本机校验高精度修改时间，无文件变化推送；这是时间戳校验的弱一致性缓存，详见[配置参考](docs/configuration.md#文件投射性能)。
 - 网络中断后会自动尝试重连，检测到断线后最多等待 **90 秒**，期间保留原 Agent、本地沙箱和文件挂载，跨机文件访问和工具结果可能暂时等待。恢复后继续原会话；超时则退出并清理进程。等待期间可按 `Ctrl+C` 取消。自动重连需要 SSH 密钥或 agent 等非交互认证方式。
 - 超时退出后，已经写入项目的文件保留。回到原项目目录，用 `waldo claude -c` 继续最近的对话，或 `waldo claude --resume` 选择历史对话；这会启动新的 Agent 进程，不能恢复已被终止的命令。
 - 碰到任何问题，先运行 `waldo doctor`，它通常会直接告诉你缺了什么、该怎么做。

@@ -18,6 +18,7 @@ import (
 
 	"github.com/creack/pty"
 
+	"waldo/internal/hosttools"
 	"waldo/internal/proto"
 	"waldo/internal/util"
 )
@@ -168,9 +169,13 @@ func (h *host) capsuleArgs(agentHome string, mnts []string, stubs map[string]str
 			a = append(a, "--ro-bind", d, d)
 		}
 	}
-	if hl.ExecMode == proto.ExecRemote {
+	if hl.ExecMode == proto.ExecRemote || hl.ExecMode == proto.ExecHostMCP {
 		a = append(a, remoteRuntimeArgs()...)
 	}
+	if hl.ExecMode == proto.ExecHostMCP {
+		a = append(a, "--tmpfs", "/tmp")
+	}
+
 	for _, f := range etcFiles {
 		src := "/etc/" + f
 		if real, err := filepath.EvalSymlinks(src); err == nil {
@@ -229,6 +234,9 @@ func (h *host) capsuleArgs(agentHome string, mnts []string, stubs map[string]str
 		binds = append(binds, bind{mnts[i], m, ro})
 	}
 	for dst, src := range stubs {
+		if hl.ExecMode == proto.ExecHostMCP {
+			dst = forwardPath(dst)
+		}
 		binds = append(binds, bind{src, dst, true})
 	}
 	sort.SliceStable(binds, func(i, j int) bool {
@@ -288,11 +296,28 @@ func (h *host) agentEnv() []string {
 		k, v, _ := strings.Cut(e, "=")
 		env = util.EnvSet(env, k, v)
 	}
-	if hl.ExecMode == proto.ExecRemote {
+	if hl.ExecMode == proto.ExecRemote || hl.ExecMode == proto.ExecHostMCP {
 		// A's toolchain locations may be missing or incompatible on B.
 		env = util.EnvFilter(env, remoteToolchainVar)
 		env = util.EnvSet(env, "PATH", "/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin")
 		env = util.EnvSet(env, "SHELL", "/bin/bash")
+	}
+	if hl.ExecMode == proto.ExecHostMCP {
+		paths := []string{}
+		for _, pd := range hl.Facts.PathDirs {
+			if pd.OnPath && filepath.IsAbs(pd.Dir) {
+				paths = append(paths, forwardPath(pd.Dir))
+			}
+		}
+		paths = append(paths, util.NativePath)
+		env = util.EnvSet(env, "PATH", strings.Join(paths, ":"))
+	}
+	// Claude can block its event loop on projected startup files before it
+	// processes a ready stdio server. Preserve explicit user/provider limits.
+	if hl.ExecMode != proto.ExecHost && hl.Profile.MCPConfigFlag == "--mcp-config" {
+		if _, set := util.EnvGet(env, "MCP_TIMEOUT"); !set {
+			env = util.EnvSet(env, "MCP_TIMEOUT", "180000")
+		}
 	}
 	cwd := hl.Cwd
 	if cwd == "" {
@@ -300,6 +325,9 @@ func (h *host) agentEnv() []string {
 	}
 	env = util.EnvSet(env, "PWD", cwd)
 	env = util.EnvSet(env, "WALDO_SESSION", hl.Session)
+	if h.toolObservation != nil {
+		env = util.EnvSet(env, "WALDO_TOOL_OBSERVER", h.toolObservation.URL)
+	}
 	for _, m := range hl.Mounts {
 		if m == proto.ContextDir {
 			env = util.EnvSet(env, "WALDO_CONTEXT", proto.ContextFile)
@@ -325,7 +353,18 @@ func (h *host) handleStub(c net.Conn) {
 	if err := proto.ReadMsg(c, &hd); err != nil || hd.Kind != proto.KindExec || hd.Exec == nil {
 		return
 	}
-	if h.hello.ExecMode == proto.ExecRemote {
+	if h.hello.ExecMode == proto.ExecHostMCP {
+		for _, pd := range h.hello.Facts.PathDirs {
+			if filepath.Dir(hd.Exec.Path) == forwardPath(pd.Dir) {
+				hd.Exec.Path = filepath.Join(pd.Dir, filepath.Base(hd.Exec.Path))
+				if len(hd.Exec.Argv) > 0 {
+					hd.Exec.Argv[0] = hd.Exec.Path
+				}
+				break
+			}
+		}
+	}
+	if h.hello.ExecMode == proto.ExecRemote || h.hello.ExecMode == proto.ExecHostMCP || hd.Exec.Tool == proto.ToolHostBash || hosttools.Known(hd.Exec.Tool) {
 		// MCP commands start in A's original sandbox environment. Never send
 		// B's PATH, model credentials or agent-specific environment back to A.
 		hd.Exec.Env = append([]string(nil), h.hello.Facts.Env...)
@@ -344,14 +383,7 @@ func (h *host) handleStub(c net.Conn) {
 		st.Close()
 		return
 	}
-	h.mu.Lock()
-	hasCache := len(h.cacheWatches) > 0
-	h.mu.Unlock()
-	if hasCache {
-		relayExec(st, c.(*net.UnixConn), h.invalidateCachesBeforeExit)
-	} else {
-		util.Splice(st, c.(*net.UnixConn))
-	}
+	relayExec(st, c.(*net.UnixConn))
 }
 
 // runAgent starts the capsule and relays the agent's stdio over the io

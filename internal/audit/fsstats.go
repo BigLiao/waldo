@@ -252,7 +252,7 @@ func (t *fsStatsTap) classify() fsClass {
 		switch string(t.prefix[8 : 8+length]) {
 		case "posix-rename@openssh.com", "hardlink@openssh.com", "fsync@openssh.com", "lsetstat@openssh.com":
 			return fsWrite
-		case "statvfs@openssh.com", "fstatvfs@openssh.com":
+		case "statvfs@openssh.com", "fstatvfs@openssh.com", "open-version@waldo", "close-version@waldo":
 			return fsRead
 		}
 	}

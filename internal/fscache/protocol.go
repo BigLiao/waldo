@@ -100,27 +100,6 @@ func statusCode(p []byte) (uint32, bool) {
 	return binary.BigEndian.Uint32(p[5:9]), true
 }
 
-func attributeInfo(body []byte) (size uint64, knownSize, regular bool) {
-	if len(body) < 4 {
-		return
-	}
-	flags, offset := binary.BigEndian.Uint32(body), 4
-	if flags&1 != 0 {
-		if len(body) < offset+8 {
-			return
-		}
-		size, knownSize = binary.BigEndian.Uint64(body[offset:]), true
-		offset += 8
-	}
-	if flags&2 != 0 {
-		offset += 8
-	}
-	if flags&4 != 0 && len(body) >= offset+4 {
-		regular = binary.BigEndian.Uint32(body[offset:])&0170000 == 0100000
-	}
-	return
-}
-
 func replaceHandle(p []byte, h string) ([]byte, bool) {
 	_, rest, ok := packetString(p[5:])
 	if !ok {

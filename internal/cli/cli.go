@@ -30,7 +30,7 @@ const usage = `waldo — Agent 跑在你的服务器上，它的"手"落在这�
 用法:
   waldo setup <user@host> [--adopt-login=false] [--skip-deps]
                                              默认复用 B 的配置和登录，自动补齐依赖并检查
-  waldo <agent> [--paseo] [--observe[=true|false]] [--exec-mode host|remote] [参数...]
+  waldo <agent> [--paseo] [--observe[=true|false]] [--exec-mode host|remote|host-mcp] [参数...]
                                              运行 Agent（内置: %s）；--observe 控制模型及工具耗时统计
   waldo run [--] <命令> [参数...]             用空 profile 运行任意 CLI Agent
   waldo doctor                                检查两端依赖、时钟偏差、Agent 安装/登录
@@ -172,7 +172,7 @@ func wrapperPrefix(args []string) ([]string, bool, *bool, string, error) {
 			observe = &enabled
 		case "--exec-mode":
 			if len(args) < 2 {
-				return nil, false, nil, "", fmt.Errorf("--exec-mode 缺少 host 或 remote")
+				return nil, false, nil, "", fmt.Errorf("--exec-mode 缺少 host、remote 或 host-mcp")
 			}
 			execMode = args[1]
 			if err := config.ValidateExecMode(execMode); err != nil {

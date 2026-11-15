@@ -3,13 +3,10 @@ package session
 import (
 	"net"
 	"os"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/hashicorp/yamux"
-
-	"waldo/internal/audit"
 	"waldo/internal/proto"
 	"waldo/internal/util"
 )
@@ -51,7 +48,7 @@ func TestCheckProject(t *testing.T) {
 	}
 }
 
-func TestRejectCacheWatchOutsideProject(t *testing.T) {
+func TestLegacyCacheNotificationsAlwaysRejected(t *testing.T) {
 	a, b := net.Pipe()
 	trusted, err := yamux.Client(a, util.YamuxConfig())
 	if err != nil {
@@ -65,6 +62,7 @@ func TestRejectCacheWatchOutsideProject(t *testing.T) {
 	defer remote.Close()
 	go acceptFromB(trusted, &Sandbox{Project: "/project", ContentCacheTTL: time.Second}, nil)
 	for _, header := range []proto.Header{
+		{Kind: proto.KindFSWatch, Path: "/project"},
 		{Kind: proto.KindFSWatch, Path: "/"},
 		{Kind: proto.KindFSWatch, Path: "/project/../other"},
 		{Kind: proto.KindFSWatch, Path: "/project", Host: "example.com"},
@@ -83,74 +81,5 @@ func TestRejectCacheWatchOutsideProject(t *testing.T) {
 			t.Fatalf("unauthorized cache watch accepted: %+v: %d %v", header, n, err)
 		}
 		st.Close()
-	}
-}
-
-func TestOnlyOneCacheWatchMaySubscribePerSession(t *testing.T) {
-	pair := func() (*yamux.Session, *yamux.Session) {
-		a, b := net.Pipe()
-		client, err := yamux.Client(a, util.YamuxConfig())
-		if err != nil {
-			t.Fatal(err)
-		}
-		server, err := yamux.Server(b, util.YamuxConfig())
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { client.Close(); server.Close() })
-		return client, server
-	}
-	trusted, remote := pair()
-	sandboxLink, sandboxPeer := pair()
-	dataDir := t.TempDir()
-	logger, err := audit.Open(dataDir, "watch-test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer logger.Close()
-	go acceptFromB(trusted, &Sandbox{Project: "/project", ContentCacheTTL: time.Second, sess: sandboxLink}, logger)
-	headers := make(chan proto.Header, 1)
-	go func() {
-		st, err := sandboxPeer.AcceptStream()
-		if err != nil {
-			return
-		}
-		var header proto.Header
-		if proto.ReadMsg(st, &header) == nil {
-			headers <- header
-			st.Write([]byte{1})
-		}
-	}()
-	first, err := remote.OpenStream()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer first.Close()
-	if err := proto.WriteMsg(first, proto.Header{Kind: proto.KindFSWatch, Path: "/project"}); err != nil {
-		t.Fatal(err)
-	}
-	first.SetReadDeadline(time.Now().Add(time.Second))
-	var one [1]byte
-	if _, err := first.Read(one[:]); err != nil {
-		t.Fatalf("first watch failed: %v", err)
-	}
-	if got := <-headers; got != (proto.Header{Kind: proto.KindFSWatch, Path: "/project"}) {
-		t.Fatalf("watch header not reconstructed from session policy: %+v", got)
-	}
-	duplicate, err := remote.OpenStream()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer duplicate.Close()
-	if err := proto.WriteMsg(duplicate, proto.Header{Kind: proto.KindFSWatch, Path: "/project"}); err != nil {
-		t.Fatal(err)
-	}
-	duplicate.SetReadDeadline(time.Now().Add(time.Second))
-	if n, err := duplicate.Read(one[:]); n != 0 || err == nil || os.IsTimeout(err) {
-		t.Fatalf("duplicate cache watch was not rejected: %d %v", n, err)
-	}
-	log, err := os.ReadFile(audit.Path(dataDir))
-	if err != nil || !strings.Contains(string(log), `"kind":"fs-watch"`) {
-		t.Fatalf("accepted watch missing audit event: %s %v", log, err)
 	}
 }

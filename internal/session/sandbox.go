@@ -211,9 +211,6 @@ func StartSandbox(o SandboxOptions) (*Sandbox, error) {
 		return nil, err
 	}
 	cfg := proto.SandboxConfig{BaseEnv: base, ExecEnv: ProxyEnv(), ProxyPort: ProxyPort, HostPorts: o.Policy.HostPorts, Mkdirs: o.Mkdirs}
-	if o.Policy.ContentCacheTTL > 0 {
-		cfg.CacheProject = o.Project
-	}
 	if spec.ContextDir != "" {
 		cfg.ContextProject = o.Project
 		cfg.InstructionFiles = o.Policy.InstructionFiles

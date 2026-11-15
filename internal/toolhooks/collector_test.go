@@ -55,8 +55,8 @@ func TestHTTPHooksLogOnlyTimingAndStopWithSession(t *testing.T) {
 	post(`{"session_id":"agent-a","tool_use_id":"call-1","tool_name":"Bash","hook_event_name":"PreToolUse","tool_input":{"command":"private-command"},"transcript_path":"private-path"}`)
 	post(`{"session_id":"agent-a","tool_use_id":"call-1","tool_name":"Bash","hook_event_name":"PostToolUse","duration_ms":12.5,"tool_response":{"stdout":"private-output"}}`)
 	post(`{"session_id":"agent-a","tool_use_id":"call-2","tool_name":"Read","hook_event_name":"PostToolUseFailure","duration_ms":0,"is_interrupt":true,"error":"private-error"}`)
-	post(`{"session_id":"agent-a","tool_use_id":"call-3","tool_name":"mcp__waldo_host__host_bash","hook_event_name":"PreToolUse","tool_input":{"command":"private-command"}}`)
-	post(`{"session_id":"agent-a","tool_use_id":"call-3","tool_name":"mcp__waldo_host__host_bash","hook_event_name":"PostToolUse","duration_ms":42}`)
+	post(`{"session_id":"agent-a","tool_use_id":"call-3","tool_name":"mcp__waldo__Bash","hook_event_name":"PreToolUse","tool_input":{"command":"private-command"}}`)
+	post(`{"session_id":"agent-a","tool_use_id":"call-3","tool_name":"mcp__waldo__Bash","hook_event_name":"PostToolUse","duration_ms":42}`)
 	c.Close()
 	c.Close()
 	data, err := os.ReadFile(filepath.Join(dir, "tool-timing.jsonl"))
@@ -76,7 +76,7 @@ func TestHTTPHooksLogOnlyTimingAndStopWithSession(t *testing.T) {
 	if rows[2].Status != "interrupted" || rows[2].Duration == nil || *rows[2].Duration != 0 || rows[2].HookElapsed != nil || *rows[2].Matched {
 		t.Fatalf("invented interval for unmatched completion: %+v", rows[2])
 	}
-	if rows[4].Tool != "mcp__waldo_host__host_bash" || rows[4].Kind != "tool-end" || rows[4].Duration == nil || *rows[4].Duration != 42 || rows[4].HookElapsed == nil {
+	if rows[4].Tool != "mcp__waldo__Bash" || rows[4].Kind != "tool-end" || rows[4].Duration == nil || *rows[4].Duration != 42 || rows[4].HookElapsed == nil {
 		t.Fatalf("lost MCP tool timing: %+v", rows[4])
 	}
 	if resp, err := client.Post(c.URL, "application/json", strings.NewReader(`{}`)); err == nil {
@@ -175,5 +175,38 @@ func TestSlowDiskCannotBlockHooksOrShutdown(t *testing.T) {
 	case <-closed:
 	case <-time.After(time.Second):
 		t.Fatal("slow log disk blocked shutdown")
+	}
+}
+
+func TestMCPExecutionDoesNotMixHookIntervals(t *testing.T) {
+	dir := t.TempDir()
+	c, e := Start(dir, "routing-session")
+	if e != nil {
+		t.Fatal(e)
+	}
+	client := &http.Client{Transport: &http.Transport{Proxy: nil}, Timeout: time.Second}
+	defer client.CloseIdleConnections()
+	resp, e := client.Post(c.URL, "application/json", strings.NewReader(`{"session_id":"waldo-mcp","tool_use_id":"mcp-1","tool_name":"mcp__waldo__Read","hook_event_name":"WaldoToolExecution","duration_ms":2.5,"location":"agent","status":"completed","file_path":"private-content"}`))
+	if e != nil {
+		t.Fatal(e)
+	}
+	resp.Body.Close()
+	c.Close()
+	data, e := os.ReadFile(filepath.Join(dir, "tool-timing.jsonl"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	rows := readRecords(t, data)
+	if len(rows) != 1 || rows[0].Kind != "tool-execution" || rows[0].Location != "agent" || rows[0].Matched != nil || rows[0].Agent != "" || strings.Contains(string(data), "private-content") {
+		t.Fatalf("wrong execution record: %s", data)
+	}
+	// This event is deliberately outside the Pre/Post pairing table.
+	in := input{Event: "WaldoToolExecution", Session: "waldo-mcp", Call: "mcp-1", Tool: "Read", Duration: new(float64), Location: "agent", Status: "completed"}
+	if !validInput(in) {
+		t.Fatal("rejected execution event")
+	}
+	in.Location = "invalid"
+	if validInput(in) {
+		t.Fatal("accepted unknown location")
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"waldo/internal/audit"
+	"waldo/internal/hosttools"
 	"waldo/internal/proto"
 	"waldo/internal/util"
 )
@@ -86,7 +87,7 @@ func (c execObservedConn) CloseWrite() error {
 
 // spliceExec measures the trusted A forwarding boundary, not B's full tool
 // invocation or just process runtime. It includes sandbox execution and its
-// cache barrier. Disk logging happens after forwarding has finished.
+// output drain. Disk logging happens after forwarding has finished.
 func spliceExec(b, a io.ReadWriteCloser, al *audit.Logger, id uint64, req *proto.ExecReq, start time.Time) {
 	observer := &execObserver{}
 	util.Splice(b, execObservedConn{ReadWriteCloser: a, observer: observer})
@@ -103,7 +104,7 @@ func logExecEnd(al *audit.Logger, id uint64, req *proto.ExecReq, start, end time
 		"scope":       "a_forward",
 		"duration_ms": float64(end.Sub(start)) / float64(time.Millisecond),
 	}
-	if req.Tool == proto.ToolHostBash {
+	if req.Tool == proto.ToolHostBash || hosttools.Known(req.Tool) {
 		fields["tool"] = req.Tool
 	}
 	if exit != nil {

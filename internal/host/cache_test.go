@@ -80,3 +80,52 @@ func TestSSHFSCacheOptions(t *testing.T) {
 		})
 	}
 }
+
+func TestMountCachePolicyByModeAndScope(t *testing.T) {
+	for _, tc := range []struct {
+		name, mode, mount     string
+		configured            int64
+		proxy                 bool
+		wantTTL, wantNegative time.Duration
+	}{
+		{"host-proxy", proto.ExecHost, "/project", 10, true, 0, 0},
+		{"remote-proxy", proto.ExecRemote, "/project", 10, true, 0, 0},
+		{"host-direct", proto.ExecHost, "/project", 10, false, 10 * time.Second, 0},
+		{"remote-direct", proto.ExecRemote, "/project", 10, false, 10 * time.Second, 0},
+		{"mcp-proxy", proto.ExecHostMCP, "/project", 10, true, 2 * time.Second, time.Second},
+		{"mcp-direct", proto.ExecHostMCP, "/project", 10, false, 2 * time.Second, time.Second},
+		{"mcp-shorter-config", proto.ExecHostMCP, "/project", 1, true, time.Second, time.Second},
+		{"mcp-disabled", proto.ExecHostMCP, "/project", 0, true, 0, 0},
+		{"mcp-readonly-skill", proto.ExecHostMCP, "/home/agent/.claude/skills/paseo", 10, false, 2 * time.Second, time.Second},
+		{"mcp-readonly-disabled", proto.ExecHostMCP, "/home/agent/.claude/skills/paseo", 0, false, 0, 0},
+		{"host-readonly-skill", proto.ExecHost, "/home/agent/.claude/skills/paseo", 10, false, 0, 0},
+		{"mcp-runtime", proto.ExecHostMCP, "/home/agent/.claude/shell-snapshots", 10, false, 0, 0},
+		{"mcp-guide", proto.ExecHostMCP, proto.ContextDir, 10, false, 0, 0},
+		{"mcp-tmp", proto.ExecHostMCP, "/tmp", 10, false, 0, 0},
+		{"mcp-path-boundary", proto.ExecHostMCP, "/home/agent/.claude/skills/paseo-other", 10, false, 0, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			hello := proto.Hello{Project: "/project", ExecMode: tc.mode, MetadataCacheTTLSeconds: tc.configured, ReadOnlyMounts: []string{"/home/agent/.claude/skills/paseo", proto.ContextDir, "/tmp"}}
+			opts, ttl, negative := sshfsMountCacheOptions(hello, tc.mount, tc.proxy)
+			if ttl != tc.wantTTL || negative != tc.wantNegative {
+				t.Fatalf("ttl=%s negative=%s", ttl, negative)
+			}
+			values := map[string]string{}
+			for _, opt := range opts {
+				k, v, _ := strings.Cut(opt, "=")
+				if _, exists := values[k]; exists {
+					t.Fatalf("duplicate %s", k)
+				}
+				values[k] = v
+			}
+			wantTTL := strconv.Itoa(int(tc.wantTTL / time.Second))
+			wantNegative := strconv.Itoa(int(tc.wantNegative / time.Second))
+			if values["attr_timeout"] != wantTTL || values["entry_timeout"] != wantTTL || values["negative_timeout"] != wantNegative || values["dir_cache"] != "no" {
+				t.Fatal(opts)
+			}
+			if _, ok := values["direct_io"]; ok != tc.proxy {
+				t.Fatalf("page caching changed: %v", opts)
+			}
+		})
+	}
+}

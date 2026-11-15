@@ -57,15 +57,15 @@ host = "me@my-server"
 # remote_dir = "~/.local/share/waldo"           # B 上的数据目录
 
 [execution]
-mode = "host"                     # 默认 host；remote 使用远端 Bash + 本机 host_bash MCP
+mode = "host"                     # host 默认；remote 远端 Bash；host-mcp 同名 MCP 工具按 location 分发
 
 [sandbox]
 expose_ro = ["~/.config/nvim"]     # 自动探测的工具链之外再只读挂载
 pass_env  = ["ANTHROPIC_MODEL", "MY_APP_*"]   # 额外传入沙箱和 Agent 的环境变量（glob）
 
 [fs]
-metadata_cache_ttl = "10s"         # 项目属性/路径缓存，默认 10 秒；"0s" 关闭
-content_cache_ttl = "10s"          # SFTP 内容缓存最大年龄；"0s" 关闭代理、沿用旧挂载方式
+metadata_cache_ttl = "10s"         # 内核属性/路径缓存；host-mcp 最多 2s；"0s" 关闭
+content_cache_ttl = "10s"          # 已读内容的闲置保留时间；"0s" 关闭代理
 
 [observe]
 enabled = true                   # 默认启用模型调用统计，可省略 --observe；默认 false
@@ -91,6 +91,12 @@ env = { CLAUDE_CODE_MAX_OUTPUT_TOKENS = "16000" }
 
 ## 命令执行模式
 
+`host-mcp` 禁用 Claude 内置 Bash、Read、Grep、Glob、Edit、Write、NotebookEdit，提供同名 MCP 工具（如 `mcp__waldo__Read`），参数沿用原工具，额外增加 `location = auto | host | agent`。使用 `waldo claude --paseo --exec-mode host-mcp` 或 `[execution] mode = "host-mcp"` 开启，未设置 `MCP_TIMEOUT` 时，MCP 启动等待上限为 180 秒，以容纳投影文件造成的启动阻塞。项目挂载仍用于说明和 skills 加载；B 保留原生 shell，仅启动时 PATH 中的 Git 探测转发 A。
+
+文件工具默认按挂载来源分发：项目/共享路径走 A，B 的 memory、会话记录和 `/tmp` 留在 B；项目位于 `/tmp` 下时该子目录仍走 A。`host` 强制访问 A，`agent` 访问 B 本地文件（不能绕过项目投影）；找不到不会换端重试，跨两端的目录搜索需拆开。Read/Edit/Write 使用 `file_path`，Grep/Glob 使用 `pattern` 和可选 `path`，NotebookEdit 使用 `notebook_path`。先 Read 再修改已有文件，版本检查由 MCP 内部管理，不需要传 hash；外部变更后需重读，此检查不承诺与外部写入者严格互斥。
+
+Read 默认 2000 行、文本输出最多 64 KiB，`allow_large` 提高到 1 MiB（文件上限从 16 MiB 提高到 64 MiB）。支持图片（最多 4 MiB）；PDF `pages` 目前只提取文字，需要所选端安装 pdfinfo/pdftotext。Grep 支持原有过滤、上下文、输出模式和 `head_limit`/`offset`；Glob 按修改时间排序。参数 JSON 上限 1 MiB，搜索输出上限 64 KiB；Write 自动创建父目录。
+
 默认 `host` 沿用原行为：B 上的 PATH 命令转发到 A 的沙箱。可在全局或项目配置中选择 `remote`，也可用启动参数临时覆盖（参数放在 Agent 参数之前）：
 
 ```sh
@@ -98,13 +104,13 @@ waldo claude --exec-mode remote
 waldo claude --paseo --exec-mode host  # 临时覆盖配置，恢复本机执行
 ```
 
-`remote` 模式下，内置 Bash 及普通子命令在 B 的胶囊中执行，使用 B 的标准系统工具（`/usr/bin`、`/usr/local/bin` 等）；Python 等所需依赖需在 B 安装。Waldo 自动注入 stdio MCP 工具 `mcp__waldo_host__host_bash`，需要 A 的虚拟环境、构建测试依赖或本机服务时调用它。工具复用当前 SSH 的原有 exec 通道，始终在 A 沙箱内执行，不增加安装步骤、监听端口或宿主机权限。与 `--paseo` 可同时使用；目前内置 Claude 支持，自定义 profile 需声明 `mcp_config_flag = "--mcp-config"`，使用相同配置格式。Codex 和空 profile 暂不支持此模式，可用 `--exec-mode host` 覆盖全局设置。
+`remote` 模式下，内置 Bash 及普通子命令在 B 的胶囊中执行，使用 B 的标准系统工具（`/usr/bin`、`/usr/local/bin` 等）；Python 等所需依赖需在 B 安装。Waldo 自动注入 stdio MCP 工具 `mcp__waldo__Bash`，需要 A 的虚拟环境、构建测试依赖或本机服务时调用它。工具复用当前 SSH 的原有 exec 通道，默认在 A 沙箱执行，`location=agent` 可指定 B；不增加 MCP 安装步骤或宿主机权限。与 `--paseo` 可同时使用；目前内置 Claude 支持，自定义 profile 需声明 `mcp_config_flag = "--mcp-config"`，使用相同配置格式。Codex 和空 profile 暂不支持此模式，可用 `--exec-mode host` 覆盖全局设置。
 
-`host_bash` 接收必填 `command`、可选绝对路径 `cwd` 和 `timeout_ms`（默认 120000，最长 600000），每次启动独立的非交互 Bash，使用 A 会话启动时的沙箱环境，不继承 B 的凭证或工具链环境。返回 stdout、stderr、exit_code，每路输出最多 128 KiB，超过时标记 truncated；超时、取消或 MCP 退出会关闭命令通道并终止仍在运行的命令进程组。不提供持久 Shell、交互输入或后台任务管理。
+`Bash` 使用原有 `command`、`timeout`（毫秒）、`description`、`run_in_background` 和 `dangerouslyDisableSandbox` 参数，加 `location`。auto 默认 A，agent 使用 B 的工具链/网络/tmp；A 使用原有沙箱环境，不继承 B 凭证。每次命令独立，切换目录用 `command` 中的 `cd`，不提供 `cwd` 参数。前台默认 120 秒、最多 10 分钟；后台默认 30 分钟、最多 2 小时，用同一 MCP 的 TaskOutput/TaskStop 查询和取消，无自动完成通知。两端均保留沙箱限制，`dangerouslyDisableSandbox=true` 报错；退出 MCP 会取消任务。stdout/stderr 各最多 128 KiB，超限标记 truncated。
 
-项目仍是同一份投影：缓存未命中的读和所有写入都经过 A，远端 Bash 写文件也会修改本机工作区。`waldo.md` 会按实际模式说明两种工具的用法；关闭 `[context] enabled` 时不注入该指南。B 的 Bash 使用 B 的网络和 localhost，A 的网络白名单、宿主机服务与开发端口转发适用于 `host_bash`。实际加速取决于缓存命中、文件访问量及依赖是否适合在 B 运行。
+项目仍是同一份投影：缓存未命中的读和所有写入都经过 A，远端 Bash 写文件也会修改本机工作区。`waldo.md` 会按实际模式说明两种工具的用法；关闭 `[context] enabled` 时不注入该指南。B 的 Bash 使用 B 的网络和 localhost，A 的网络白名单、宿主机服务与开发端口转发适用于 `Bash`。实际加速取决于缓存命中、文件访问量及依赖是否适合在 B 运行。
 
-`host_bash` 调用始终写入 A 的 `exec` / `exec-end`，额外标记 `tool = "host_bash"`，可按会话统计调用次数、平均/最大耗时、退出码和中断状态；`waldo log -f | rg 'tool=host_bash'` 可单独查看。`exec-end.duration_ms` 仍是 A 接收请求到观察到执行结束的耗时，不包含完整往返。开启 `--observe` 后，B 的 `tool-timing.jsonl` 同时按 `tool = "mcp__waldo_host__host_bash"` 记录原生工具耗时与 hook 间隔（范围见下文）；B 的普通 Bash 不写入 A 的 exec 日志。
+在 A 执行的 `Bash` 调用写入 A 的 `exec` / `exec-end`，额外标记 `tool = "Bash"`，可按会话统计调用次数、平均/最大耗时、退出码和中断状态；`waldo log -f | rg 'tool=Bash'` 可单独查看。`exec-end.duration_ms` 仍是 A 接收请求到观察到执行结束的耗时，不包含完整往返。开启 `--observe` 后，B 的 `tool-timing.jsonl` 同时按 `tool = "mcp__waldo__Bash"` 记录原生工具耗时与 hook 间隔（范围见下文）；B 的普通 Bash 不写入 A 的 exec 日志。MCP 另写 `kind=tool-execution`，包含 `location` 和 B 观察到的执行耗时，不记录参数或内容；它和原生 Hook 事件是不同统计口径，不要累加。
 
 ## 轻量运行日志
 
@@ -130,7 +136,7 @@ enabled = false
 
 | 日志类型 | 内容与耗时范围 |
 |---|---|
-| `exec` / `exec-end` | 关联 ID、程序名、退出状态、耗时；从 A 可信客户端收到命令请求，到观察到退出结果，包含沙箱执行、输出收尾和缓存失效屏障，不是纯程序运行时间，也不包含完整的 B 端工具调用时间 |
+| `exec` / `exec-end` | 关联 ID、程序名、退出状态、耗时；从 A 可信客户端收到命令请求，到观察到退出结果，包含沙箱执行和输出收尾，不是纯程序运行时间，也不包含完整的 B 端工具调用时间 |
 | `file-read` / `file-write` | 每 5 秒汇总已完成的 SFTP 读写请求次数和累计耗时，流结束时补一次汇总；包含 OPEN 和属性、目录等请求，次数不等于文件数，失败回复也算完成；`scope=sftp_rpc` |
 | `model-call` | 通过配置或 `--observe` 开启后，原生客户端报告的模型请求次数、错误数和累计 `duration_ms`；Codex 的流事件处理时间另列 `stream_event_ms`，不能将它或 HTTP 请求耗时当作完整生成时长 |
 
@@ -152,13 +158,15 @@ Claude profile 在启用 `--observe` 时额外注入公开的 HTTP `PreToolUse`�
 
 ## 文件投射性能
 
-项目默认使用 B 上的会话内 SFTP 缓存代理。完整读取过的小文件可在后续打开时直接由 B 应答，写入、截断、删除、重命名和其他修改仍转发到 A 的原有 SFTP 服务。缓存使用会话内存：内容预算 30 MiB、元数据预算 2 MiB，单文件最多 1 MiB，最多为缓存保留 256 个只读句柄；特殊文件和目录列表直通。它不是完整工作区镜像，也不跨会话持久保存。`content_cache_ttl` 默认 `10s`，是内容缓存的最大年龄，不会因反复读取而延长。缓存只有在实际 EOF 或同一文件句柄上的 FSTAT 确认完整性后才发布；关闭文件时仍没有 EOF、需要确认已捕获的内容是否完整时，首次关闭可能增加一次 FSTAT 确认往返。
+项目默认使用 B 上的会话内 SFTP 内容缓存。每次只读打开项目文件时，A 在沙箱内实际打开文件，取得该句柄的纳秒级修改时间、大小、设备及 inode，并在一次 SFTP 扩展请求中返回句柄和版本。B 逐文件比较版本：一致则复用缓存内容，不一致才在后续实际 READ 请求中取新内容。打开文件本身不预读正文，也不主动补全部分读取的文件。到达代理的属性查询和目录列表始终回源，删除、重命名和权限变化由 A 的实际文件操作处理。
 
-A 在项目目录内递归监听文件变化，复用现有 SSH 连接推送失效通知。第一版收到变化后保守清除整个项目缓存。Agent 经 SFTP 发起的修改会先停止缓存命中，处理本机结果并清除缓存后再返回；转发命令结束时，正常情况等待本会话远端确认缓存失效；对异常订阅的单次屏障等待上限为 3 秒，超时断开并重新订阅。B 将退出结果交还 Agent 前还会同步清理一次缓存，覆盖通知流关闭和重订阅期间的时序；这不改变物理断线时等待传输恢复的行为。本机编辑器、Git 和其他进程的普通文件修改通过监听异步失效，仍存在通知传播窗口。
+A 不再安装项目目录监听器，链路没有缓存通知、心跳或命令完成失效屏障；其他进程持续修改日志等无关文件不会清空源码缓存。所有写入仍由 A 原有 SFTP 服务执行；每次后续打开独立校验，无需先推送或全局清缓存。校验与打开使用同一个文件句柄，已有只读句柄可以保持本次打开时的缓存快照，重新打开才检查路径当前版本。
 
-代理模式使用 `direct_io`，关闭 SSHFS 自身的属性、目录和内容页缓存，由代理统一控制缓存有效性。冷读、大于 1 MiB 的文件及目录列表仍回源，失去内核页缓存可能使部分大文件访问退化，依赖 mmap 的程序也需要验证；这类项目可关闭内容代理。`metadata_cache_ttl` 控制代理内成功的元数据查询缓存；不存在的路径不缓存。`/tmp`、Agent 共享运行目录和会话说明目录不使用项目代理。
+这是时间戳校验的弱一致性缓存，不计算内容哈希：保留相同精确修改时间、大小和文件身份的改写可能漏检，底层文件系统时间分辨率较粗时也有此限制。读取过程中发生并发改写不保证原子快照。填充缓存时只收集实际读取过的数据，在关闭时再次检查同一文件句柄版本，仅将完整且版本未变的小文件收入缓存；关闭校验与 CLOSE 合并为一个请求。热读仍有打开校验和关闭往返，节省的是正文传输，不能保证所有工作负载加速。断线中的新打开等待原传输恢复，不能绕过校验使用旧内容。
 
-初始目录监听安装期间请求直通 A，不阻塞会话启动。监听失败、事件队列溢出或通知中断时先禁用缓存并回源；A 会按有上限的退避重建完整监听，B 会重新订阅通知。只有完整监听和新的订阅握手恢复后才重新启用缓存，恢复前不会使用旧内容。降级与恢复记录在会话日志中。通知心跳有短租约，断线和恢复会清除缓存。进行中的旧请求不能在失效后重新填充缓存。监听无法覆盖任意写入方式：例如 mmap 写入、网络文件系统在其他机器上的修改、符号链接指向未监控目录，以及部分硬链接别名更新，可能需要回源读取；要求绕过缓存时可设置：
+缓存只用会话内存，总数据预算 32 MiB，单文件最多 1 MiB，最多 256 项，通过容量上限和 LRU 淘汰；所有打开快照与进行中的填充也计入数据预算。文件关闭后不为缓存保留 A 的句柄。`content_cache_ttl` 默认 `10s`，改为闲置保留时间，成功复用后重新计时；它不再决定内容是否最新。特殊文件、大文件及不支持校验扩展的服务直通原 SFTP。`/tmp`、Agent 共享运行目录和会话指南目录不使用项目代理。
+
+`host`/`remote` 的代理模式使用 `direct_io`，关闭 SSHFS 的属性、目录和内容页缓存，以确保真正打开时会执行校验。`metadata_cache_ttl` 在该模式下不缓存代理内路径属性；关闭内容代理后才控制 SSHFS 内核属性/路径缓存。冷读、大文件可能失去页缓存收益；需要直接挂载时可配置：
 
 ```toml
 [project."/home/me/work/shop".fs]
@@ -168,7 +176,9 @@ content_cache_ttl = "0s"
 
 两个 TTL 均支持 `0s` 到 `1m` 的整数秒，全局 `[fs]` 配置可被项目配置覆盖，新会话生效。为兼容旧配置：如果有效的 `metadata_cache_ttl` 是显式设置的 `0s`，且全局和当前项目都未显式设置 `content_cache_ttl`，内容缓存也保持关闭。显式的内容 TTL 优先。单独设置 `content_cache_ttl = "0s"` 会恢复旧的直接 SSHFS 模式，此时 `metadata_cache_ttl` 继续控制内核属性/路径缓存，A 上的变化可能在 TTL 内不可见。两个值都设为零才同时关闭这些缓存。`waldo log` 的会话事件及 B 的 `host.log` 记录配置，方便排查。
 
-项目监听需要为目录建立 inotify watches，会使用本机用户的监听配额，当前没有子目录排除策略。监听覆盖不完整时继续回源而不会跳过不可读子树后照常缓存；依赖目录很大的项目可关闭内容代理，以避免长期重试或与 IDE 的监听竞争。大目录命中率、冷读、命令屏障和 mmap 行为仍需在真实双机及 FUSE 环境中评估，不能把协议层热读零上游请求视为整个 Agent 的提速比例。
+`host-mcp` 对项目及显式只读 skill 挂载启用短缓存：属性/目录项最多 2 秒，不存在的路径最多 1 秒；均受 `metadata_cache_ttl` 限制，设为 `0s` 可关闭。内容代理开启时也生效，仍保留 `direct_io` 和逐文件打开校验；不缓存目录列表，不增加文件监听或推送。自动加载的配置/skills 可能延迟这段时间才看到变化，MCP 对 A 的文件读写直接执行，不经过挂载缓存。共享运行目录和会话指南保持无元数据缓存。B 的 `host.log` 同时记录实际属性缓存和负缓存 TTL。
+
+大型仓库、目录遍历和 Git 仍可能产生大量元数据往返，按文件校验主要减少正文重传，并不保证它们变快。普通命令建议保持默认 `host` 模式；实际收益应以真实双机和 FUSE 工作负载衡量，不能把缓存命中率直接当作整个 Agent 的提速比例。
 
 ## Agent 会话说明
 

@@ -1,5 +1,5 @@
-// Package hostbash exposes A's existing sandbox exec channel as a stdio MCP.
-// It never opens another SSH connection or executes a shell on B.
+// Package hostbash exposes sandbox tools as a stdio MCP, routing operations
+// to A over the existing exec channel or locally inside B's capsule.
 package hostbash
 
 import (
@@ -11,7 +11,7 @@ import (
 	"waldo/internal/proto"
 )
 
-const ServerName = "waldo_host"
+const ServerName = "waldo"
 const ToolName = proto.ToolHostBash
 
 // IsProbe identifies the CLI discovery commands used by provider diagnostics.
@@ -65,12 +65,16 @@ func Configs(args []string) ([]string, error) {
 
 // Inject adds a separate, session-only config; Claude merges it with existing
 // MCP servers (including Paseo). The fixed executable is inside B's capsule.
-func Inject(args []string, shell, cwd string) []string {
+func Inject(args []string, shell, cwd string, fileTools ...bool) []string {
 	if IsProbe(args) {
 		return append([]string(nil), args...)
 	}
+	serverArgs := []string{"host-bash-mcp", "--shell", shell, "--cwd", cwd}
+	if len(fileTools) > 0 && fileTools[0] {
+		serverArgs = append(serverArgs, "--file-tools")
+	}
 	data, _ := json.Marshal(map[string]any{"mcpServers": map[string]any{
-		ServerName: map[string]any{"type": "stdio", "command": "/run/waldo/waldo", "args": []string{"host-bash-mcp", "--shell", shell, "--cwd", cwd}},
+		ServerName: map[string]any{"type": "stdio", "command": "/run/waldo/waldo", "args": serverArgs},
 	}})
 	end := len(args)
 	for i, arg := range args {
@@ -82,4 +86,12 @@ func Inject(args []string, shell, cwd string) []string {
 	out := append([]string(nil), args[:end]...)
 	out = append(out, "--mcp-config", string(data))
 	return append(out, args[end:]...)
+}
+
+// DisableHostTools routes shell and filesystem work through the host MCP.
+func DisableHostTools(args []string) []string {
+	if IsProbe(args) {
+		return append([]string(nil), args...)
+	}
+	return append([]string{"--disallowedTools=Bash,Read,Edit,Write,Glob,Grep,NotebookEdit"}, args...)
 }

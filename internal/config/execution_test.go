@@ -5,6 +5,7 @@ import "testing"
 func TestExecutionPolicy(t *testing.T) {
 	for _, tc := range []struct{ source, project, want string }{
 		{"", "/project", "host"},
+		{"[execution]\nmode='host-mcp'", "/project", "host-mcp"},
 		{"[execution]\nmode='remote'", "/project", "remote"},
 		{"[execution]\nmode='remote'\n[project.\"/project\".execution]\nmode='host'", "/project", "host"},
 		{"[execution]\nmode='host'\n[project.\"/project\".execution]\nmode='remote'", "/project", "remote"},

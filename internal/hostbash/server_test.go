@@ -57,7 +57,7 @@ func (c *rpcClient) receive(t *testing.T) map[string]any {
 
 func TestMCPHandshakeDiscoveryAndToolResult(t *testing.T) {
 	c := startRPC(t, func(ctx context.Context, call Call) (Result, error) {
-		if call.Command != "exit 7" || call.Cwd != "/project" {
+		if call.Command != "exit 7" || call.Location != "host" {
 			t.Errorf("bad call: %+v", call)
 		}
 		return Result{Stdout: "out", Stderr: "err", ExitCode: 7}, nil
@@ -70,17 +70,17 @@ func TestMCPHandshakeDiscoveryAndToolResult(t *testing.T) {
 	c.send(t, nil, "notifications/initialized", map[string]any{})
 	c.send(t, 2, "tools/list", map[string]any{})
 	tools := c.receive(t)["result"].(map[string]any)["tools"].([]any)
-	if len(tools) != 1 || tools[0].(map[string]any)["name"] != ToolName {
+	if len(tools) != 3 || tools[0].(map[string]any)["name"] != ToolName {
 		t.Fatal(tools)
 	}
-	c.send(t, 3, "tools/call", map[string]any{"name": ToolName, "arguments": Call{Command: "exit 7", Cwd: "/project"}})
+	c.send(t, 3, "tools/call", map[string]any{"name": ToolName, "arguments": Call{Command: "exit 7", Location: "host"}})
 	r = c.receive(t)["result"].(map[string]any)
 	text := r["content"].([]any)[0].(map[string]any)["text"].(string)
 	var result Result
 	if json.Unmarshal([]byte(text), &result) != nil || result.ExitCode != 7 || result.Stdout != "out" || result.Stderr != "err" || r["isError"] != true {
 		t.Fatalf("bad tool result: %v", r)
 	}
-	for _, arguments := range []any{map[string]any{"command": "id", "cwd": "relative"}, map[string]any{"command": "id", "timeout_ms": 600001}, map[string]any{"command": "id", "env": map[string]string{"SECRET": "no"}}, map[string]any{}} {
+	for _, arguments := range []any{map[string]any{"command": "id", "cwd": "relative"}, map[string]any{"command": "id", "timeout": 600001}, map[string]any{"command": "id", "env": map[string]string{"SECRET": "no"}}, map[string]any{}} {
 		c.send(t, 4, "tools/call", map[string]any{"name": ToolName, "arguments": arguments})
 		if c.receive(t)["error"] == nil {
 			t.Fatal("accepted invalid tool arguments")
@@ -124,5 +124,50 @@ func TestMCPRejectsMalformedMessagesWithoutExecuting(t *testing.T) {
 	var extra any
 	if d.Decode(&extra) != io.EOF {
 		t.Fatal("non-protocol stdout")
+	}
+}
+
+func TestFileToolsAreOptIn(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		inR, inW := io.Pipe()
+		outR, outW := io.Pipe()
+		done := make(chan error, 1)
+		go func() {
+			done <- Serve(context.Background(), inR, outW, func(_ context.Context, c Call) (Result, error) {
+				if c.Tool != "Read" {
+					t.Errorf("wrong tool %q", c.Tool)
+				}
+				return Result{Stdout: "read result"}, nil
+			}, enabled)
+		}()
+		enc := json.NewEncoder(inW)
+		dec := json.NewDecoder(outR)
+		enc.Encode(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+		var response map[string]any
+		dec.Decode(&response)
+		defs := response["result"].(map[string]any)["tools"].([]any)
+		want := 3
+		if enabled {
+			want = 9
+		}
+		if len(defs) != want {
+			t.Fatalf("tools=%d", len(defs))
+		}
+		enc.Encode(map[string]any{"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": map[string]any{"name": "Read", "arguments": map[string]any{"file_path": "/project/file"}}})
+		response = nil
+		dec.Decode(&response)
+		if enabled && response["error"] != nil {
+			t.Fatal(response)
+		}
+		if !enabled && response["error"] == nil {
+			t.Fatal("file tool exposed in remote mode")
+		}
+		inW.Close()
+		if e := <-done; e != nil {
+			t.Fatal(e)
+		}
+		outW.Close()
+		outR.Close()
+		inR.Close()
 	}
 }
