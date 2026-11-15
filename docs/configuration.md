@@ -89,6 +89,8 @@ env = { CLAUDE_CODE_MAX_OUTPUT_TOKENS = "16000" }
 
 `waldo allow` 写的是 `~/.config/waldo/allowed.json`，与 `config.toml` 合并。
 
+Paseo 的 Claude SDK 流式会话会显示“Waldo 正在启动”和初始化完成耗时。初始化期间暂存用户消息，SDK 控制请求照常通过；收到真实 `initialize` 成功应答后再发送消息。提示仅显示在聊天流，不发给模型；初始化完成不代表所有异步 MCP 连接都已完成。Paseo 开始消费首轮输出流后可见；创建 Agent 页面的等待状态仍由 Paseo 控制。普通 CLI 输出保持原格式。
+
 ## 命令执行模式
 
 `host-mcp` 禁用 Claude 内置 Bash、Read、Grep、Glob、Edit、Write、NotebookEdit，提供同名 MCP 工具（如 `mcp__waldo__Read`），参数沿用原工具，额外增加 `location = auto | host | agent`。使用 `waldo claude --paseo --exec-mode host-mcp` 或 `[execution] mode = "host-mcp"` 开启，未设置 `MCP_TIMEOUT` 时，MCP 启动等待上限为 180 秒，以容纳投影文件造成的启动阻塞。项目挂载仍用于说明和 skills 加载；B 保留原生 shell，仅启动时 PATH 中的 Git 探测转发 A。

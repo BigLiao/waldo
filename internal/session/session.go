@@ -38,6 +38,7 @@ type Options struct {
 	Observe        *bool  // nil inherits global/project configuration
 	Paseo          bool
 	paseoBroker    *paseo.Broker
+	startup        *startupStream
 	readOnlyMounts []string
 	Config         *config.Config
 	Profile        profile.Profile
@@ -108,6 +109,10 @@ func Run(o Options) int {
 	if host == "" {
 		warnf("还没有配置服务器。先运行：waldo setup <user@host>")
 		return 2
+	}
+	if startupEnabled(o) {
+		o.startup = newStartupStream(os.Stdout)
+		defer o.startup.Close()
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -356,7 +361,8 @@ func runRemote(o Options, host string, sb *Sandbox, id, cwd, project string, mou
 			}
 			return false
 		},
-		watch: conn.OnReconnect,
+		watch:   conn.OnReconnect,
+		startup: o.startup,
 	})
 	if conn.ReconnectExpired() {
 		warnf("90 秒内未能恢复连接，本次会话已结束")
@@ -463,8 +469,9 @@ func relayAgentIO(st io.ReadWriteCloser, interactive bool) int {
 // relayReconnect lets a resumable link cancel a pending reconnect and show
 // its state without disturbing the agent's full-screen UI.
 type relayReconnect struct {
-	cancel func() bool
-	watch  func(func(up bool)) func()
+	startup *startupStream
+	cancel  func() bool
+	watch   func(func(up bool)) func()
 }
 
 func relayAgentIOCancelable(st io.ReadWriteCloser, interactive bool, rc *relayReconnect) int {
@@ -473,6 +480,13 @@ func relayAgentIOCancelable(st io.ReadWriteCloser, interactive bool, rc *relayRe
 		cancelReconnect = rc.cancel
 	}
 	fw := proto.NewFrameWriter(st)
+	var startup *startupStream
+	if rc != nil {
+		startup = rc.startup
+	}
+	if startup != nil {
+		startup.attach(fw.Write)
+	}
 	var outMu sync.Mutex // agent output and reconnect notices share the terminal
 	restoreTerminal := func() {}
 	if interactive {
@@ -519,17 +533,36 @@ func relayAgentIOCancelable(st io.ReadWriteCloser, interactive bool, rc *relayRe
 				if n > 0 && bytes.IndexByte(buf[:n], 3) >= 0 && cancelReconnect != nil && cancelReconnect() {
 					return
 				}
-				if n > 0 && fw.Write(proto.FStdin, buf[:n]) != nil {
-					return
+				if n > 0 {
+					var writeErr error
+					if startup != nil {
+						writeErr = startup.Input(buf[:n])
+					} else {
+						writeErr = fw.Write(proto.FStdin, buf[:n])
+					}
+					if writeErr != nil {
+						warnf("发送 Claude 输入失败: %v", writeErr)
+						st.Close()
+						return
+					}
 				}
 				if err != nil {
-					fw.Write(proto.FStdinEOF, nil)
+					if startup != nil {
+						if err := startup.EOF(); err != nil {
+							st.Close()
+						}
+					} else {
+						fw.Write(proto.FStdinEOF, nil)
+					}
 					return
 				}
 			}
 		}()
 	}
 	var out, errw io.Writer = os.Stdout, os.Stderr
+	if startup != nil {
+		out = startup
+	}
 	if term.IsTerminal(1) {
 		out = termfilter.New(os.Stdout)
 	}
@@ -568,8 +601,13 @@ func relayAgentIOCancelable(st io.ReadWriteCloser, interactive bool, rc *relayRe
 		switch typ {
 		case proto.FStdout:
 			outMu.Lock()
-			out.Write(p)
+			_, writeErr := out.Write(p)
 			outMu.Unlock()
+			if writeErr != nil {
+				warnf("处理 Claude 输出失败: %v", writeErr)
+				st.Close()
+				return 255
+			}
 		case proto.FStderr, proto.FError:
 			errw.Write(p)
 		case proto.FExit:

@@ -125,6 +125,8 @@ waldo link claude
 | `waldo claude --exec-mode remote` | Bash 在远端执行，需要本机环境时调用注入的 `Bash` MCP；配置 `[execution] mode = "remote"` 可默认开启，`host` 切回原模式 |
 | `waldo link <agent>` | 让 `claude` 等命令直接走 waldo |
 
+Paseo 流式会话会显示 Waldo 启动状态，初始化完成后再发送首条消息。
+
 ## 按需调整
 
 大多数时候无需任何配置。最常遇到的情况是 Agent 需要访问某个接口或私有仓库，这时放行对应域名即可，正在运行的会话立刻生效：
