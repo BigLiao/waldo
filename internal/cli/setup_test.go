@@ -56,6 +56,7 @@ esac
 	// The apt branch uses env to pass DEBIAN_FRONTEND without affecting sudo.
 	write("env", "shift\nexec \"$@\"\n")
 	write("ssh", `
+printf '%s\n' "$@" >> "$SETUP_TEST_SSH_LOG"
 for arg do remote=$arg; done
 case "$remote" in
   *waldo-install*)
@@ -87,6 +88,7 @@ esac
 	t.Setenv("WALDO_DATA_DIR", filepath.Join(root, "data"))
 	t.Setenv("WALDO_SSH_ARGS", "")
 	t.Setenv("SETUP_TEST_LOG", filepath.Join(root, "operations"))
+	t.Setenv("SETUP_TEST_SSH_LOG", filepath.Join(root, "ssh-args"))
 	t.Setenv("SETUP_TEST_BIN", bin)
 	t.Setenv("SETUP_TEST_FAIL_A", "")
 	t.Setenv("SETUP_TEST_FAIL_B", "")
@@ -190,7 +192,7 @@ func TestSetupLoginReuseOptions(t *testing.T) {
 }
 
 func TestInvalidSetupNeverInstalls(t *testing.T) {
-	for _, args := range [][]string{nil, {"--help"}, {"example", "other"}, {"example", "--unknown"}} {
+	for _, args := range [][]string{nil, {"example", "other"}, {"example", "--unknown"}} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			log := setupTestEnv(t, false)
 			if code := setup(&config.Config{}, args); code != 2 {

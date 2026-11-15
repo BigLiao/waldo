@@ -8,9 +8,12 @@
 |---|---|
 | `waldo setup <host> [--adopt-login=false] [--skip-deps]` | 自动安装两端缺少的系统依赖，写入 `host`，安装/升级 B 端二进制，默认复用 B 上已有的 Agent 配置与登录，运行 doctor；`--adopt-login=false` 停止共享已有状态目录；`--skip-deps` 跳过系统依赖安装 |
 | `waldo doctor` | 两端依赖、bwrap 能否建沙箱、Agent 是否安装/已有登录态、时钟偏差 |
+| `waldo remote ls [--json]` | 查看远端配置、默认选择及本机活跃会话数，不连接 SSH |
+| `waldo remote status [名称 \| --all] [--timeout 10s] [--json]` | 检查远端 SSH、Waldo 版本及依赖；不安装、升级或启动 Agent |
+| `waldo sessions [--remote 名称] [--json]` | 查看本机活跃会话、目标机器及 SSH 状态 |
 | `waldo allow [--global] <域名>` | 给当前项目（或所有项目）放行出网域名，运行中的会话立即生效 |
-| `waldo ports` | 当前会话转发到 `127.0.0.1` 的端口 |
-| `waldo log [-n N] [-f] [-s 会话]` | 审计日志：执行过的命令、写过的文件、出网、端口 |
+| `waldo ports [--remote 名称] [--json]` | 当前会话转发到 `127.0.0.1` 的端口 |
+| `waldo log [--remote 名称] [-n N] [-f] [-s 会话]` | 审计日志：执行过的命令、写过的文件、出网、端口 |
 | `waldo link [--remove] <agent>` | 生成 `<agent>` → `waldo <agent>` 的包装脚本 |
 | `waldo dev-sandbox -- <命令>` | 调试用：只起 A 端沙箱（同样的策略），在里面跑一条命令 |
 
@@ -90,6 +93,80 @@ env = { CLAUDE_CODE_MAX_OUTPUT_TOKENS = "16000" }
 `waldo allow` 写的是 `~/.config/waldo/allowed.json`，与 `config.toml` 合并。
 
 Paseo 的 Claude SDK 流式会话会显示“Waldo 正在启动”和初始化完成耗时。初始化期间暂存用户消息，SDK 控制请求照常通过；收到真实 `initialize` 成功应答后再发送消息。提示仅显示在聊天流，不发给模型；初始化完成不代表所有异步 MCP 连接都已完成。Paseo 开始消费首轮输出流后可见；创建 Agent 页面的等待状态仍由 Paseo 控制。普通 CLI 输出保持原格式。
+
+## 多远端机器
+
+一台 A 可同时连接多台 B，每台 B 使用其 SSH 用户已有的 Claude 登录和状态：
+
+```toml
+default_remote = "b1"
+
+[remote.b1]
+host = "ubuntu@server-1"
+
+[remote.b2]
+host = "claude-server-2"          # 也可使用 ~/.ssh/config 的别名
+ssh_args = ["-i", "/home/me/.ssh/server-2"]
+# remote_dir = "~/.local/share/waldo"
+```
+
+选择顺序为 `--remote <名称>`、`default_remote`、旧版顶层 `host`。三者均未指定且只有一个 `[remote.*]` 时自动选中该机器；仅配置多个命名远端时需设置默认值或显式选择。名称不存在或缺少地址会报错，不回退。远端未指定 `ssh_args` / `remote_dir` 时继承顶层设置，`ssh_args = []` 清除顶层 SSH 参数；`WALDO_SSH_ARGS` 仍追加到最终参数。名称支持字母或数字开头的 1–64 个字母、数字、点、下划线和连字符。
+
+原有 `host` 单机配置和 `waldo claude` / `waldo claude --paseo` 启动方式继续使用，无需迁移账号或重写配置。`waldo ports` 无参数保留原文本格式，结构化输出显式使用 `--json`。`remote`、`sessions` 为新增的管理命令名，自定义 Agent profile 请避免同名。
+
+```sh
+waldo setup --remote b1          # 配置写好后逐台初始化，不修改默认远端
+waldo setup --remote b2
+waldo doctor --remote b2
+waldo claude --remote b2 --exec-mode host-mcp
+```
+
+原有 `waldo setup user@host` 仍只写入顶层 `host`，不会改变 `default_remote`。命名远端的地址直接编辑配置，不与 setup 的位置地址同时使用。`--remote` 放在 Agent 参数之前，也可放在 `waldo` 与 Agent 名称之间；`waldo run --remote b2 -- <命令>` 同样支持。
+
+日常查看：
+
+```sh
+waldo remote ls                         # * 标记默认远端；(host) 是旧版顶层配置
+waldo remote status                     # 检查默认远端
+waldo remote status b2                   # 检查指定机器
+waldo remote status --all --timeout 10s  # 最多 4 台并发，各自限时
+waldo sessions --remote b2               # 会话 ID、SSH 状态、PID 和项目
+waldo ports --remote b2
+waldo log --remote b2 -n 30              # -f 持续跟踪，也可叠加 -s 会话
+```
+
+`remote ls`（也可写 `remote list`）、`sessions`、`ports` 仅读本机记录，活跃会话数不代表 SSH 当前可达。新版客户端记录 `starting`、`connected`、`reconnecting`；旧客户端缺少状态时显示 `unknown`。`sessions`、`ports`、`remote ls/status` 支持 `--json`。会话、端口和日志按记录中的远端名称筛选，即使配置已删除仍可查看；旧版日志没有远端标记，无法按名称筛选。
+
+`remote status` 使用非交互 SSH，需已有可信主机密钥和免交互认证。它不会自动安装或更新 B 的 Waldo；缺失显示 `not-installed`，版本不同显示 `version-mismatch`，先用对应 `setup` 处理。同版本时检查依赖和 Agent 状态目录，不启动 Claude、不请求模型，也不验证账号额度或凭证有效期。`CHECK_MS` 是完整检查耗时，包含远端诊断，并非纯网络延迟。检查全部远端时单台失败不影响其他结果；有连接、安装、版本或必要依赖错误时返回 1，参数或选择错误返回 2。
+
+帮助支持 `waldo help`（或 `waldo --help`）、`waldo help remote`、`waldo help remote status`，也可使用 `waldo remote status --help` 等子命令帮助；未完成 setup 或配置文件写错时仍可查看，不触发 SSH。`waldo help claude` 解释 Waldo 包装参数；`waldo claude --help` 仍透传给远端 Claude 自身。
+
+Paseo 为每台机器配置独立 provider（合入 `~/.paseo/config.json`，替换二进制路径）：
+
+```json
+{
+  "agents": {
+    "providers": {
+      "waldo-b1": {
+        "extends": "claude",
+        "label": "Claude · B1",
+        "command": ["/home/me/.local/bin/waldo", "claude", "--remote", "b1", "--paseo"]
+      },
+      "waldo-b2": {
+        "extends": "claude",
+        "label": "Claude · B2",
+        "command": ["/home/me/.local/bin/waldo", "claude", "--remote", "b2", "--paseo"]
+      }
+    }
+  }
+}
+```
+
+执行 `paseo reload` 后，新建 Agent 时选择对应 provider。provider 的显式远端不受 `default_remote` 修改影响；需要固定工具模式时可在 command 末尾追加 `--exec-mode host-mcp`。配置规则见 [Paseo custom providers](https://paseo.sh/docs/custom-providers)。
+
+会话启动后固定目标，断线仍重连原 B，切模型不换机器。A 的日志和 `waldo ports` 带远端标识。Paseo Agent ID，以及显式传入或从 Claude stream-json 初始化/结果事件观察到的原生会话 ID，绑定在 A 的数据目录 `session-routes/`；恢复时若目标字符串、有效 SSH 参数或 `remote_dir` 改变则报错，需使用原配置或新建会话。绑定不保存凭证、SSH 参数原文或聊天内容，也不会识别 SSH 别名背后配置的变化。旧会话第一次由此版本启动时才建立绑定；普通交互 CLI 自动生成的 ID 无法从终端界面可靠识别，需用 `--session-id` 显式指定才能预先绑定。`--continue` 或按名称恢复仅在已选 B 内查找。
+
+账号和额度分别由各台 B 的 Claude 管理，不自动切机重放任务。多个 Agent 同时修改同一项目时建议使用独立 worktree。
 
 ## 命令执行模式
 

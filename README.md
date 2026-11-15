@@ -107,6 +107,12 @@ waldo link claude
 
 `--paseo` 会通过现有 SSH 连接桥接 Paseo MCP，并只读投影本机已安装的 `paseo`、`paseo-*` skills。请在 Paseo 的主机设置中开启 **Enable Paseo tools**；此参数需要 Paseo 注入的 agent ID 和认证，不能在普通终端中单独开启。它授予远端 agent 使用 Paseo 编排工具的权限，详见 [安全说明](docs/SECURITY.md)。
 
+多台远端机器可配置 `[remote.b1]`、`[remote.b2]`，用 `waldo claude --remote b2` 选择，各自保留 Claude 账号。在 Paseo 中给每台机器配置一个 provider，启动命令加 `--remote b2` 即可，见 [多远端配置](docs/configuration.md#多远端机器)。
+
+`waldo remote ls` 查看远端列表，`waldo remote status --all` 检查连接，`waldo sessions --remote b2` 查看会话；端口和日志也支持 `--remote b2` 筛选。
+
+旧版单机 `host` 配置无需修改；只有一台命名远端且未设置 `host` 时也会自动选中。帮助可用 `waldo help`、`waldo help remote`、`waldo help remote status`。
+
 连接中断导致进程退出时，本轮聊天会报错；网络恢复后可在原聊天中发消息尝试恢复对话，执行到一半的命令不会自动恢复。
 
 ## 常用命令
@@ -115,6 +121,7 @@ waldo link claude
 |---|---|
 | `waldo setup <user@host>` | 一次性初始化，连接你的服务器 |
 | `waldo <agent> [参数...]` | 启动 Agent（内置 `claude`、`codex`） |
+| `waldo <agent> --remote b2` | 选择命名远端；初始化和检查可用 `waldo setup --remote b2`、`waldo doctor --remote b2` |
 | `waldo run -- <命令>` | 启动任意命令行 Agent |
 | `waldo doctor` | 遇到问题时先跑它，检查两端环境是否就绪 |
 | `waldo allow <域名>` | 允许当前项目访问某个域名，加 `--global` 对所有项目生效 |

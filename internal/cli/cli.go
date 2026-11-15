@@ -11,7 +11,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"waldo/internal/audit"
@@ -28,17 +27,29 @@ import (
 const usage = `waldo — Agent 跑在你的服务器上，它的"手"落在这台机器的沙箱里
 
 用法:
-  waldo setup <user@host> [--adopt-login=false] [--skip-deps]
+  waldo setup [<user@host> | --remote <名称>] [--adopt-login=false] [--skip-deps]
                                              默认复用 B 的配置和登录，自动补齐依赖并检查
-  waldo <agent> [--paseo] [--observe[=true|false]] [--exec-mode host|remote|host-mcp] [参数...]
+  waldo <agent> [--remote <名称>] [--paseo] [--observe[=true|false]] [--exec-mode host|remote|host-mcp] [参数...]
                                              运行 Agent（内置: %s）；--observe 控制模型及工具耗时统计
   waldo run [--] <命令> [参数...]             用空 profile 运行任意 CLI Agent
-  waldo doctor                                检查两端依赖、时钟偏差、Agent 安装/登录
+  waldo doctor [--remote <名称>]              检查两端依赖、时钟偏差、Agent 安装/登录
+  waldo remote ls [--json]                    列出远端配置、默认选择和本机会话数（不连接 SSH）
+  waldo remote status [名称 | --all]          限时检查 SSH、Waldo 版本和远端依赖，不安装或启动 Agent
+  waldo sessions [--remote <名称>] [--json]   查看本机活跃会话与 SSH 连接状态
   waldo allow [--global] <域名>               给当前项目放行一个出网域名
-  waldo ports                                 查看当前转发的端口
-  waldo log [-n N] [-f]                       查看本机审计日志
+  waldo ports [--remote <名称>] [--json]      查看当前转发的端口
+  waldo log [--remote <名称>] [-n N] [-f]     查看本机审计日志
   waldo link [--remove] <agent>               在 PATH 前放一个 <agent> → waldo <agent> 的包装
   waldo version
+  waldo help [命令 [子命令]]                 分级帮助，例如 waldo help remote status
+
+示例:
+  waldo claude                                原有单机配置直接使用，无需 --remote
+  waldo claude --remote b2                     选择命名远端
+  waldo remote status --all                    检查全部机器
+  waldo help remote                           查看远端管理帮助
+
+默认选择: --remote > default_remote > 原有 host；未设 host 时唯一命名远端自动选中。
 
 配置: %s
 `
@@ -54,10 +65,13 @@ func loadConfig() (*config.Config, int) {
 
 // Main dispatches A-side commands. args excludes the program name.
 func Main(args []string) int {
-	args, withPaseo, withObserve, withExecMode, err := wrapperPrefix(args)
+	args, opts, err := wrapperPrefix(args)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "waldo: %v\n", err)
 		return 2
+	}
+	if topic, ok := helpRequest(args); ok {
+		return showHelp(topic, os.Stdout)
 	}
 	cfg, code := loadConfig()
 	if cfg == nil {
@@ -68,41 +82,48 @@ func Main(args []string) int {
 		fmt.Fprintf(os.Stderr, usage, strings.Join(profile.Names(profiles), ", "), config.Path())
 		return 2
 	}
-	if withPaseo {
+	if opts.Paseo {
 		if _, ok := profiles[args[0]]; !ok {
 			fmt.Fprintln(os.Stderr, "waldo: --paseo 只用于已配置的 Agent")
 			return 2
 		}
 	}
-	if withObserve != nil && args[0] != "run" {
+	if opts.Observe != nil && args[0] != "run" {
 		if _, ok := profiles[args[0]]; !ok {
 			fmt.Fprintln(os.Stderr, "waldo: --observe 只用于 Agent 或 run")
 			return 2
 		}
 	}
-	if withExecMode != "" && args[0] != "run" {
+	if opts.ExecMode != "" && args[0] != "run" {
 		if _, ok := profiles[args[0]]; !ok {
 			fmt.Fprintln(os.Stderr, "waldo: --exec-mode 只用于 Agent 或 run")
 			return 2
 		}
 	}
+	if opts.Remote != "" && args[0] != "run" && args[0] != "setup" && args[0] != "doctor" && args[0] != "sessions" && args[0] != "ports" && args[0] != "log" {
+		if _, ok := profiles[args[0]]; !ok {
+			fmt.Fprintln(os.Stderr, "waldo: --remote 只用于 Agent、run、setup、doctor、sessions、ports 或 log")
+			return 2
+		}
+	}
 	switch args[0] {
-	case "-h", "--help", "help":
-		fmt.Printf(usage, strings.Join(profile.Names(profiles), ", "), config.Path())
-		return 0
 	case "version", "--version":
 		fmt.Println(proto.FullVersion())
 		return 0
 	case "setup":
-		return setup(cfg, args[1:])
+		return setup(cfg, withRemote(args[1:], opts.Remote))
 	case "doctor":
-		return doctor(cfg)
+		return doctorCommand(cfg, withRemote(args[1:], opts.Remote))
+	case "remote":
+		return remoteCmd(cfg, args[1:], os.Stdout)
+	case "sessions":
+		return sessionsCmd(withRemote(args[1:], opts.Remote), os.Stdout, false)
 	case "allow":
 		return allow(args[1:])
 	case "ports":
-		return ports()
+		return sessionsCmd(withRemote(args[1:], opts.Remote), os.Stdout, true)
 	case "log":
-		return logCmd(args[1:])
+		return logCmd(withRemote(args[1:], opts.Remote))
 	case "link":
 		return link(args[1:])
 	case "dev-sandbox":
@@ -112,12 +133,12 @@ func Main(args []string) int {
 		}
 		return session.DevSandbox(cfg, a)
 	case "run":
-		a, paseo, observe, execMode, err := wrapperPrefix(args[1:])
+		a, runOpts, err := wrapperPrefix(args[1:])
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "waldo: %v\n", err)
 			return 2
 		}
-		if paseo {
+		if runOpts.Paseo {
 			fmt.Fprintln(os.Stderr, "waldo: --paseo 只用于已配置的 Agent")
 			return 2
 		}
@@ -128,27 +149,17 @@ func Main(args []string) int {
 			fmt.Fprintln(os.Stderr, "用法: waldo run [--] <命令> [参数...]")
 			return 2
 		}
-		if observe == nil {
-			observe = withObserve
-		}
-		if execMode == "" {
-			execMode = withExecMode
-		}
-		return session.Run(session.Options{Config: cfg, Profile: profile.Empty(a[0]), Args: a[1:], Observe: observe, ExecMode: execMode})
+		runOpts.inherit(opts)
+		return session.Run(session.Options{Config: cfg, Profile: profile.Empty(a[0]), Args: a[1:], Observe: runOpts.Observe, ExecMode: runOpts.ExecMode, Remote: runOpts.Remote})
 	}
 	if p, ok := profiles[args[0]]; ok {
-		agentArgs, enabled, observe, execMode, err := wrapperPrefix(args[1:])
+		agentArgs, agentOpts, err := wrapperPrefix(args[1:])
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "waldo: %v\n", err)
 			return 2
 		}
-		if observe == nil {
-			observe = withObserve
-		}
-		if execMode == "" {
-			execMode = withExecMode
-		}
-		return session.Run(session.Options{Config: cfg, Profile: p, Args: agentArgs, Paseo: withPaseo || enabled, Observe: observe, ExecMode: execMode})
+		agentOpts.inherit(opts)
+		return session.Run(session.Options{Config: cfg, Profile: p, Args: agentArgs, Paseo: agentOpts.Paseo, Observe: agentOpts.Observe, ExecMode: agentOpts.ExecMode, Remote: agentOpts.Remote})
 	}
 	fmt.Fprintf(os.Stderr, "waldo: 未知命令或 Agent %q（waldo help 查看用法；任意命令请用 waldo run -- %s）\n", args[0], args[0])
 	return 2
@@ -156,74 +167,147 @@ func Main(args []string) int {
 
 // Only consume wrapper flags before agent arguments. Literal --paseo or
 // --observe supplied after -p or -- remain agent arguments.
-func wrapperPrefix(args []string) ([]string, bool, *bool, string, error) {
-	paseo := false
-	var observe *bool
-	execMode := ""
+type wrapperOptions struct {
+	Paseo    bool
+	Observe  *bool
+	ExecMode string
+	Remote   string
+}
+
+func (o *wrapperOptions) inherit(parent wrapperOptions) {
+	o.Paseo = o.Paseo || parent.Paseo
+	if o.Observe == nil {
+		o.Observe = parent.Observe
+	}
+	if o.ExecMode == "" {
+		o.ExecMode = parent.ExecMode
+	}
+	if o.Remote == "" {
+		o.Remote = parent.Remote
+	}
+}
+
+func wrapperPrefix(args []string) ([]string, wrapperOptions, error) {
+	var opts wrapperOptions
 	for len(args) > 0 {
 		switch args[0] {
 		case "--paseo":
-			paseo = true
+			opts.Paseo = true
 		case "--observe":
 			enabled := true
-			observe = &enabled
+			opts.Observe = &enabled
 		case "--observe=true", "--observe=false":
 			enabled := args[0] == "--observe=true"
-			observe = &enabled
+			opts.Observe = &enabled
+		case "--remote":
+			if len(args) < 2 {
+				return nil, opts, fmt.Errorf("--remote 缺少远端名称")
+			}
+			if err := config.ValidateRemoteName(args[1]); err != nil {
+				return nil, opts, err
+			}
+			opts.Remote = args[1]
+			args = args[1:]
 		case "--exec-mode":
 			if len(args) < 2 {
-				return nil, false, nil, "", fmt.Errorf("--exec-mode 缺少 host、remote 或 host-mcp")
+				return nil, opts, fmt.Errorf("--exec-mode 缺少 host、remote 或 host-mcp")
 			}
-			execMode = args[1]
-			if err := config.ValidateExecMode(execMode); err != nil {
-				return nil, false, nil, "", err
+			opts.ExecMode = args[1]
+			if err := config.ValidateExecMode(opts.ExecMode); err != nil {
+				return nil, opts, err
 			}
 			args = args[1:]
 		default:
+			if value, ok := strings.CutPrefix(args[0], "--remote="); ok {
+				if err := config.ValidateRemoteName(value); err != nil {
+					return nil, opts, err
+				}
+				opts.Remote = value
+				args = args[1:]
+				continue
+			}
 			if value, ok := strings.CutPrefix(args[0], "--exec-mode="); ok {
 				if err := config.ValidateExecMode(value); err != nil {
-					return nil, false, nil, "", err
+					return nil, opts, err
 				}
-				execMode = value
+				opts.ExecMode = value
 				args = args[1:]
 				continue
 			}
 			if strings.HasPrefix(args[0], "--observe=") {
-				return nil, false, nil, "", fmt.Errorf("--observe expects true or false")
+				return nil, opts, fmt.Errorf("--observe expects true or false")
 			}
-			return args, paseo, observe, execMode, nil
+			return args, opts, nil
 		}
 		args = args[1:]
 	}
-	return args, paseo, observe, execMode, nil
+	return args, opts, nil
+}
+
+func withRemote(args []string, remote string) []string {
+	if remote != "" {
+		return append([]string{"--remote", remote}, args...)
+	}
+	return args
 }
 
 func setup(cfg *config.Config, args []string) int {
 	fs := flag.NewFlagSet("setup", flag.ContinueOnError)
 	adopt := fs.Bool("adopt-login", true, "复用 B 上已有的 Agent 配置和登录；设为 false 停止共享已有目录")
 	skipDeps := fs.Bool("skip-deps", false, "跳过自动安装系统依赖（仍运行 doctor）")
+	remote := fs.String("remote", "", "初始化已配置的命名远端")
 	var hostArg string
 	var rest []string
-	for _, a := range args {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--remote" || a == "-remote" {
+			rest = append(rest, a)
+			if i+1 < len(args) {
+				i++
+				rest = append(rest, args[i])
+			}
+			continue
+		}
 		if !strings.HasPrefix(a, "-") && hostArg == "" {
 			hostArg = a
 		} else {
 			rest = append(rest, a)
 		}
 	}
-	if err := fs.Parse(rest); err != nil {
-		return 2
+	if code := managementFlags(fs, rest); code >= 0 {
+		return code
 	}
 	if fs.NArg() != 0 {
 		fmt.Fprintln(os.Stderr, "waldo: setup 只接受一个服务器地址")
 		return 2
 	}
-	if hostArg == "" {
-		hostArg = cfg.Host
-	}
-	if hostArg == "" {
-		fmt.Fprintln(os.Stderr, "用法: waldo setup <user@host> [--adopt-login=false] [--skip-deps]")
+	if flagSet(fs, "remote") && *remote == "" {
+		fmt.Fprintln(os.Stderr, "waldo: --remote 缺少远端名称")
 		return 2
+	}
+	if hostArg != "" && *remote != "" {
+		fmt.Fprintln(os.Stderr, "waldo: --remote 与服务器地址不能同时使用，请在 [remote.<名称>] 配置 host")
+		return 2
+	}
+	original := cfg
+	legacyUpdate := hostArg != "" && hostArg != cfg.Host
+	// A positional address retains legacy setup semantics and updates only host.
+	// A named/default remote is initialized without changing any configuration.
+	if hostArg != "" {
+		selected := *cfg
+		selected.Host = hostArg
+		selected.DefaultRemote = ""
+		cfg = &selected
+	}
+	selected, name, err := cfg.ResolveRemote(*remote)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "waldo: %v\n", err)
+		return 2
+	}
+	cfg = selected
+	hostArg = cfg.Host
+	if name != "" {
+		fmt.Printf("远端 %s（%s）\n", name, termfilter.Sanitize(hostArg))
 	}
 	if !*skipDeps {
 		fmt.Println("A（本机）：检查并安装缺少的系统依赖…")
@@ -232,12 +316,12 @@ func setup(cfg *config.Config, args []string) int {
 			return 1
 		}
 	}
-	if hostArg != cfg.Host {
+	if legacyUpdate {
 		if err := config.SetHost(hostArg); err != nil {
 			fmt.Fprintf(os.Stderr, "waldo: %v\n", err)
 			return 1
 		}
-		cfg.Host = hostArg
+		original.Host = hostArg
 		fmt.Printf("✓ 已写入 %s: host = %q\n", config.Path(), hostArg)
 	}
 	tr := session.SSHTransport(cfg, hostArg)
@@ -276,6 +360,33 @@ func setup(cfg *config.Config, args []string) int {
 		fmt.Println("✓ 已停止共享 B 上已有的 Agent 状态目录（保留 waldo 的独立状态和已有文件副本）")
 	}
 	return doctor(cfg)
+}
+
+func flagSet(fs *flag.FlagSet, name string) bool {
+	set := false
+	fs.Visit(func(f *flag.Flag) { set = set || f.Name == name })
+	return set
+}
+
+func doctorCommand(cfg *config.Config, args []string) int {
+	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
+	remote := fs.String("remote", "", "检查指定远端")
+	if code := managementFlags(fs, args); code >= 0 {
+		return code
+	}
+	if fs.NArg() != 0 || flagSet(fs, "remote") && *remote == "" {
+		fmt.Fprintln(os.Stderr, "用法: waldo doctor [--remote <名称>]")
+		return 2
+	}
+	selected, name, err := cfg.ResolveRemote(*remote)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "waldo: %v\n", err)
+		return 2
+	}
+	if name != "" {
+		fmt.Printf("远端 %s\n", name)
+	}
+	return doctor(selected)
 }
 
 func indent(s string) string {
@@ -451,55 +562,28 @@ func allow(args []string) int {
 	return 0
 }
 
-func ports() int {
-	ents, _ := os.ReadDir(session.RunDir())
-	n := 0
-	for _, e := range ents {
-		p := filepath.Join(session.RunDir(), e.Name())
-		b, err := os.ReadFile(p)
-		if err != nil {
-			continue
-		}
-		var st struct {
-			PID     int    `json:"pid"`
-			Session string `json:"session"`
-			Agent   string `json:"agent"`
-			Project string `json:"project"`
-			Ports   []int  `json:"ports"`
-		}
-		if json.Unmarshal(b, &st) != nil {
-			continue
-		}
-		if st.PID <= 0 || syscall.Kill(st.PID, 0) != nil {
-			os.Remove(p)
-			continue
-		}
-		n++
-		var ps []string
-		for _, x := range st.Ports {
-			ps = append(ps, "127.0.0.1:"+strconv.Itoa(x))
-		}
-		if len(ps) == 0 {
-			ps = []string{"（无）"}
-		}
-		fmt.Printf("%s  %-8s %s\n    %s\n", st.Session, st.Agent, st.Project, strings.Join(ps, "  "))
-	}
-	if n == 0 {
-		fmt.Println("没有运行中的会话")
-	}
-	return 0
-}
-
 func logCmd(args []string) int {
 	fs := flag.NewFlagSet("log", flag.ContinueOnError)
 	n := fs.Int("n", 50, "显示最后 N 条")
 	follow := fs.Bool("f", false, "持续输出新事件")
 	sess := fs.String("s", "", "只看某个会话")
-	if err := fs.Parse(args); err != nil {
+	remote := fs.String("remote", "", "只看指定远端的历史日志")
+	if code := managementFlags(fs, args); code >= 0 {
+		return code
+	}
+	if fs.NArg() != 0 {
+		fmt.Fprintln(os.Stderr, "用法: waldo log [--remote <名称>] [-s 会话] [-n N] [-f]")
 		return 2
 	}
+	if flagSet(fs, "remote") {
+		if err := config.ValidateRemoteName(*remote); err != nil {
+			fmt.Fprintf(os.Stderr, "waldo: %v\n", err)
+			return 2
+		}
+	}
+	filter := audit.Filter{Session: *sess, Remote: *remote}
 	dd := config.DataDir()
-	if err := audit.Print(os.Stdout, dd, *n, *sess); err != nil {
+	if err := audit.PrintFiltered(os.Stdout, dd, *n, filter); err != nil {
 		fmt.Fprintf(os.Stderr, "waldo: %v\n", err)
 		return 1
 	}
@@ -527,7 +611,7 @@ func logCmd(args []string) int {
 			}
 			line := string(buf[:i])
 			buf = buf[i+1:]
-			if *sess == "" || strings.Contains(line, `"s":"`+*sess+`"`) {
+			if filter.Matches(line) {
 				fmt.Println(audit.Format(line))
 			}
 		}

@@ -2,7 +2,6 @@ package session
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -34,16 +33,19 @@ import (
 
 // Options for one agent session.
 type Options struct {
-	ExecMode       string // empty inherits global/project configuration
-	Observe        *bool  // nil inherits global/project configuration
-	Paseo          bool
-	paseoBroker    *paseo.Broker
-	startup        *startupStream
-	readOnlyMounts []string
-	Config         *config.Config
-	Profile        profile.Profile
-	Args           []string
-	Host           string // overrides Config.Host
+	ExecMode        string // empty inherits global/project configuration
+	Observe         *bool  // nil inherits global/project configuration
+	Paseo           bool
+	paseoBroker     *paseo.Broker
+	startup         *startupStream
+	readOnlyMounts  []string
+	Config          *config.Config
+	Profile         profile.Profile
+	Args            []string
+	Host            string // overrides Config.Host
+	Remote          string // empty selects Config.DefaultRemote, then legacy Host
+	route           *sessionRoute
+	connectionState func(string)
 }
 
 func warnf(format string, a ...any) { fmt.Fprintf(os.Stderr, "waldo: "+format+"\n", a...) }
@@ -88,13 +90,16 @@ func SSHTransport(cfg *config.Config, host string) *transport.SSH {
 	return &transport.SSH{Host: host, ExtraArgs: extra, RemoteDir: cfg.RemoteDirOrDefault()}
 }
 
-type runState struct {
-	PID     int    `json:"pid"`
-	Session string `json:"session"`
-	Agent   string `json:"agent"`
-	Project string `json:"project"`
-	Host    string `json:"host"`
-	Ports   []int  `json:"ports"`
+// RunState describes a local client and its fixed remote target.
+type RunState struct {
+	PID        int    `json:"pid"`
+	Session    string `json:"session"`
+	Agent      string `json:"agent"`
+	Project    string `json:"project"`
+	Host       string `json:"host"`
+	Remote     string `json:"remote,omitempty"`
+	Ports      []int  `json:"ports"`
+	Connection string `json:"connection,omitempty"`
 }
 
 // RunDir holds one state file per live session (for `waldo ports`).
@@ -102,14 +107,22 @@ func RunDir() string { return filepath.Join(config.DataDir(), "run") }
 
 // Run runs one agent session and returns the exit code.
 func Run(o Options) int {
-	host := o.Host
-	if host == "" {
-		host = o.Config.Host
+	// Resolve once: reconnects and all forwarded channels use this same copy.
+	if o.Host != "" {
+		source := *o.Config
+		source.Host, source.DefaultRemote = o.Host, ""
+		o.Config = &source
 	}
-	if host == "" {
-		warnf("还没有配置服务器。先运行：waldo setup <user@host>")
+	cfg, remote, err := o.Config.ResolveRemote(o.Remote)
+	if err != nil {
+		warnf("%v", err)
 		return 2
 	}
+	o.Config, o.Remote = cfg, remote
+	if o.Host != "" {
+		cfg.Host = o.Host
+	}
+	host := cfg.Host
 	if startupEnabled(o) {
 		o.startup = newStartupStream(os.Stdout)
 		defer o.startup.Close()
@@ -120,6 +133,7 @@ func Run(o Options) int {
 		return 1
 	}
 	var skillMounts []sandbox.ReadOnlyMount
+	paseoIdentity := ""
 	probe := hostbash.IsProbe(o.Args)
 	if o.Paseo {
 		if o.Profile.MCPConfigFlag != "--mcp-config" || o.Profile.SkillDir == "" {
@@ -137,6 +151,7 @@ func Run(o Options) int {
 			}
 			o.paseoBroker = paseo.NewBroker(endpoint)
 			defer o.paseoBroker.Close()
+			paseoIdentity = "paseo:" + endpoint.URL.Query().Get("callerAgentId")
 			skills, err := paseo.Skills(home, util.ExpandHome(o.Profile.SkillDir, home))
 			if err != nil {
 				warnf("Paseo skills: %v", err)
@@ -146,6 +161,17 @@ func Run(o Options) int {
 				skillMounts = append(skillMounts, sandbox.ReadOnlyMount{Source: skill.Source, Target: skill.Target})
 				o.readOnlyMounts = append(o.readOnlyMounts, skill.Target)
 			}
+		}
+	}
+	if !probe && (o.Profile.Telemetry == "claude" || paseoIdentity != "") {
+		o.route = newSessionRoute(cfg, remote)
+		var nativeArgs []string
+		if o.Profile.Telemetry == "claude" {
+			nativeArgs = append(append([]string(nil), o.Profile.Args...), o.Args...)
+		}
+		if err := o.route.prepare(paseoIdentity, nativeArgs); err != nil {
+			warnf("%v", err)
+			return 2
 		}
 	}
 	cwd, err := os.Getwd()
@@ -205,7 +231,7 @@ func Run(o Options) int {
 	}
 	dataDir := config.DataDir()
 	id := newID()
-	al, err := audit.Open(dataDir, id)
+	al, err := audit.OpenRemote(dataDir, id, remote, host)
 	if err != nil {
 		warnf("审计日志: %v", err)
 		return 1
@@ -236,7 +262,7 @@ func Run(o Options) int {
 	al.Log("session", map[string]any{"agent": o.Profile.Name, "project": project, "host": host, "args": paseo.AuditArgs(o.Args), "paseo": o.paseoBroker != nil, "exec_mode": o.ExecMode, "observe": pol.ObserveEnabled, "metadata_cache_ttl": pol.MetadataCacheTTL.String(), "content_cache_ttl": pol.ContentCacheTTL.String()})
 	snap := sandbox.TakeSnapshot(project)
 
-	state := runState{PID: os.Getpid(), Session: id, Agent: o.Profile.Name, Project: project, Host: host}
+	state := RunState{PID: os.Getpid(), Session: id, Agent: o.Profile.Name, Project: project, Host: host, Remote: remote, Connection: "starting"}
 	statePath := filepath.Join(RunDir(), fmt.Sprintf("%d.json", os.Getpid()))
 	var stMu sync.Mutex
 	writeState := func(ports []int) {
@@ -244,8 +270,13 @@ func Run(o Options) int {
 		defer stMu.Unlock()
 		state.Ports = ports
 		os.MkdirAll(RunDir(), 0o700)
-		b, _ := json.Marshal(state)
-		os.WriteFile(statePath, b, 0o600)
+		writeRunState(statePath, state)
+	}
+	o.connectionState = func(status string) {
+		stMu.Lock()
+		defer stMu.Unlock()
+		state.Connection = status
+		writeRunState(statePath, state)
 	}
 	writeState(nil)
 	defer os.Remove(statePath)
@@ -286,6 +317,23 @@ func runRemote(o Options, host string, sb *Sandbox, id, cwd, project string, mou
 		return 255
 	}
 	defer conn.Close()
+	connectionState := func(up bool) {
+		if o.connectionState != nil {
+			status := "reconnecting"
+			if up {
+				status = "connected"
+			}
+			o.connectionState(status)
+		}
+	}
+	// Track pipe/Paseo sessions too; terminal rendering replaces only the
+	// notice part of this callback below, not the state tracking.
+	stopConnectionNotice := conn.OnReconnect(func(up bool) {
+		connectionState(up)
+		fmt.Fprintf(os.Stderr, "\r\nwaldo: %s\r\n", transport.ReconnectMessage(up))
+	})
+	defer stopConnectionNotice()
+	connectionState(!conn.Reconnecting())
 	bs, err := yamux.Client(conn.RW, util.ResumableYamuxConfig())
 	if err != nil {
 		warnf("%v", err)
@@ -361,8 +409,14 @@ func runRemote(o Options, host string, sb *Sandbox, id, cwd, project string, mou
 			}
 			return false
 		},
-		watch:   conn.OnReconnect,
+		watch: func(notice func(bool)) func() {
+			return conn.OnReconnect(func(up bool) {
+				connectionState(up)
+				notice(up)
+			})
+		},
 		startup: o.startup,
+		route:   o.route.observer(append(append([]string(nil), o.Profile.Args...), o.Args...)),
 	})
 	if conn.ReconnectExpired() {
 		warnf("90 秒内未能恢复连接，本次会话已结束")
@@ -470,6 +524,7 @@ func relayAgentIO(st io.ReadWriteCloser, interactive bool) int {
 // its state without disturbing the agent's full-screen UI.
 type relayReconnect struct {
 	startup *startupStream
+	route   *routeObserver
 	cancel  func() bool
 	watch   func(func(up bool)) func()
 }
@@ -600,6 +655,13 @@ func relayAgentIOCancelable(st io.ReadWriteCloser, interactive bool, rc *relayRe
 		}
 		switch typ {
 		case proto.FStdout:
+			if rc != nil && rc.route != nil {
+				if err := rc.route.observe(p); err != nil {
+					warnf("记录远端会话失败: %v", err)
+					st.Close()
+					return 255
+				}
+			}
 			outMu.Lock()
 			_, writeErr := out.Write(p)
 			outMu.Unlock()

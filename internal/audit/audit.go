@@ -19,6 +19,19 @@ type Logger struct {
 	mu      sync.Mutex
 	f       *os.File
 	session string
+	remote  string
+	host    string
+}
+
+// OpenRemote attaches the resolved machine to every event, including tool
+// timings, so concurrent sessions can be compared without joining session logs.
+func OpenRemote(dataDir, session, remote, host string) (*Logger, error) {
+	l, err := Open(dataDir, session)
+	if err != nil {
+		return nil, err
+	}
+	l.remote, l.host = remote, host
+	return l, nil
 }
 
 // Path of the audit log in dataDir.
@@ -45,6 +58,14 @@ func (l *Logger) Log(kind string, fields map[string]any) {
 	for k, v := range fields {
 		ev[k] = v
 	}
+	if l.host != "" {
+		// Network events already use host for their destination. Keep the
+		// session's SSH target in a separate additive field.
+		ev["remote_host"] = l.host
+	}
+	if l.remote != "" {
+		ev["remote"] = l.remote
+	}
 	b, err := json.Marshal(ev)
 	if err != nil {
 		return
@@ -62,6 +83,27 @@ func (l *Logger) Close() {
 
 // Print writes the last n events of the log in human-readable form.
 func Print(w io.Writer, dataDir string, n int, session string) error {
+	return PrintFiltered(w, dataDir, n, Filter{Session: session})
+}
+
+type Filter struct {
+	Session string
+	Remote  string
+}
+
+// Matches uses only top-level metadata; command contents cannot spoof a match.
+func (f Filter) Matches(line string) bool {
+	if f.Session == "" && f.Remote == "" {
+		return true
+	}
+	var ev struct {
+		Session string `json:"s"`
+		Remote  string `json:"remote"`
+	}
+	return json.Unmarshal([]byte(line), &ev) == nil && (f.Session == "" || ev.Session == f.Session) && (f.Remote == "" || ev.Remote == f.Remote)
+}
+
+func PrintFiltered(w io.Writer, dataDir string, n int, filter Filter) error {
 	f, err := os.Open(Path(dataDir))
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -75,7 +117,7 @@ func Print(w io.Writer, dataDir string, n int, session string) error {
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 1<<20), 1<<24)
 	for sc.Scan() {
-		if session != "" && !strings.Contains(sc.Text(), `"s":"`+session+`"`) {
+		if !filter.Matches(sc.Text()) {
 			continue
 		}
 		lines = append(lines, sc.Text())
@@ -107,6 +149,8 @@ func Format(line string) string {
 	delete(ev, "t")
 	delete(ev, "s")
 	delete(ev, "kind")
+	remote, _ := ev["remote"].(string)
+	delete(ev, "remote")
 	var detail string
 	switch kind {
 	case "exec":
@@ -135,6 +179,9 @@ func Format(line string) string {
 			parts = append(parts, fmt.Sprintf("%s=%v", k, ev[k]))
 		}
 		detail = strings.Join(parts, " ")
+	}
+	if remote != "" {
+		detail = "remote=" + remote + " " + detail
 	}
 	return fmt.Sprintf("%s %s %-8s %s", t, s, kind, detail)
 }

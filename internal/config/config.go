@@ -84,17 +84,19 @@ type ProjectCfg struct {
 }
 
 type Config struct {
-	Execution ExecutionCfg               `toml:"execution"`
-	Host      string                     `toml:"host"`
-	SSHArgs   []string                   `toml:"ssh_args"`
-	RemoteDir string                     `toml:"remote_dir"`
-	Sandbox   SandboxCfg                 `toml:"sandbox"`
-	Context   ContextCfg                 `toml:"context"`
-	FS        FSCfg                      `toml:"fs"`
-	Observe   ObserveCfg                 `toml:"observe"`
-	Net       NetCfg                     `toml:"net"`
-	Project   map[string]ProjectCfg      `toml:"project"`
-	Agent     map[string]profile.Profile `toml:"agent"`
+	DefaultRemote string                     `toml:"default_remote"`
+	Remote        map[string]RemoteCfg       `toml:"remote"`
+	Execution     ExecutionCfg               `toml:"execution"`
+	Host          string                     `toml:"host"`
+	SSHArgs       []string                   `toml:"ssh_args"`
+	RemoteDir     string                     `toml:"remote_dir"`
+	Sandbox       SandboxCfg                 `toml:"sandbox"`
+	Context       ContextCfg                 `toml:"context"`
+	FS            FSCfg                      `toml:"fs"`
+	Observe       ObserveCfg                 `toml:"observe"`
+	Net           NetCfg                     `toml:"net"`
+	Project       map[string]ProjectCfg      `toml:"project"`
+	Agent         map[string]profile.Profile `toml:"agent"`
 }
 
 // Path of the main config file.

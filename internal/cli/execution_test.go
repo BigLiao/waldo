@@ -17,13 +17,14 @@ func TestExecutionPrefix(t *testing.T) {
 		{[]string{"-p", "--exec-mode=remote"}, []string{"-p", "--exec-mode=remote"}, ""},
 		{[]string{"--", "--exec-mode", "remote"}, []string{"--", "--exec-mode", "remote"}, ""},
 	} {
-		out, _, _, mode, err := wrapperPrefix(tc.in)
+		out, opts, err := wrapperPrefix(tc.in)
+		mode := opts.ExecMode
 		if err != nil || !reflect.DeepEqual(out, tc.out) || mode != tc.want {
 			t.Fatalf("%v: %v %q %v", tc.in, out, mode, err)
 		}
 	}
 	for _, args := range [][]string{{"--exec-mode"}, {"--exec-mode="}, {"--exec-mode", "bad"}, {"--exec-mode=REMOTE"}} {
-		if _, _, _, _, err := wrapperPrefix(args); err == nil {
+		if _, _, err := wrapperPrefix(args); err == nil {
 			t.Fatalf("accepted %v", args)
 		}
 	}
