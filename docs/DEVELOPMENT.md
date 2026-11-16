@@ -12,6 +12,8 @@ make build     # ./waldo，版本号用 git 提交号
 make release   # dist/waldo-linux-{amd64,arm64}；B 的架构与 A 不同时，A 会找同目录下的这些文件
 ```
 
+`make release` 同时复制根目录的 `install.sh`，并为两个二进制和安装脚本生成 `dist/SHA256SUMS`。安装脚本默认从 GitHub latest 固定一个稳定版 tag，校验两个架构的文件后安装；`--version` 可指定版本，`--bin-dir` 可指定目录，不自动调用 setup 或修改用户配置。
+
 依赖：A 需要 `ssh`、`bubblewrap`（claude profile 还需要 `rg`、`git`、`bash`）；B 需要 `sshd`、`bubblewrap`、`sshfs`（fuse3）和已安装的 Agent。
 
 ## CI 与发布
@@ -25,11 +27,12 @@ git tag -a v0.1.0 -m "Release v0.1.0"
 git push origin v0.1.0
 ```
 
-`vMAJOR.MINOR.PATCH` tag 会先运行同一套 CI，成功后构建并创建 GitHub Release，附带自动生成的发布说明和三个文件：
+`vMAJOR.MINOR.PATCH` tag 会先运行同一套 CI，成功后构建并创建 GitHub Release，附带自动生成的发布说明和四个文件：
 
 - `waldo-linux-amd64`
 - `waldo-linux-arm64`
 - `SHA256SUMS`（SHA256 校验文件）
+- `install.sh`（一键安装脚本）
 
 `v0.2.0-rc.1` 这样的 tag 会发布为 prerelease，不更新 latest。工作流使用自带的 `GITHUB_TOKEN`，发布 job 已声明 `contents: write`，无需配置额外 secret。发布同一 tag 的已有 Release 时会报错，避免覆盖已经发布的二进制。
 
@@ -42,6 +45,8 @@ make test-unit     # 纯单元测试
 make test-attack   # M0：沙箱攻击回归测试，每个攻击都必须失败（另有正向对照）
 make test-e2e      # M1–M3：用假 Agent 跑通 A → ssh → B 胶囊 → stub → A 全链路
 ```
+
+`test-unit` 包含 `test/install` 的安装脚本回归：用本地模拟下载验证架构选择、版本固定、校验失败保护和主程序原子替换，不访问 GitHub、不写真实安装目录。
 
 e2e 测试自己起一个只接受临时密钥的用户态 `sshd`（随机端口），A/B 的数据和配置目录都放在 `~/.cache/waldo-test/run-*`，结束后删除，不碰 `~/.ssh` 和 `~/.local/share/waldo`。A、B 在同一台机器上时，主机名和路径都一样，所以测试用**网络命名空间**判断代码在哪执行：A 沙箱有自己的网络命名空间，B 胶囊用的是宿主机的。
 

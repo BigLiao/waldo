@@ -17,12 +17,14 @@ release:        ## static binaries for linux/amd64 and linux/arm64 in dist/
 	mkdir -p dist
 	GOOS=linux GOARCH=amd64 go build -trimpath -ldflags '$(LDFLAGS)' -o dist/waldo-linux-amd64 ./cmd/waldo
 	GOOS=linux GOARCH=arm64 go build -trimpath -ldflags '$(LDFLAGS)' -o dist/waldo-linux-arm64 ./cmd/waldo
+	cp install.sh dist/install.sh
+	cd dist && sha256sum waldo-linux-amd64 waldo-linux-arm64 install.sh > SHA256SUMS
 
 vet:
 	go vet ./...
 
 test-unit:
-	go test -count=1 ./internal/...
+	go test -count=1 ./internal/... ./test/install
 
 test-attack:    ## sandbox regression tests (needs bwrap, curl, python3)
 	go test -p 1 -count=1 -v ./test/attack/
