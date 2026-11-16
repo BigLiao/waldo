@@ -9,6 +9,7 @@ import (
 
 func TestRouteMountOwnership(t *testing.T) {
 	root := t.TempDir()
+	root, _ = filepath.EvalSymlinks(root)
 	project := filepath.Join(root, "project")
 	os.Mkdir(project, 0700)
 	mounts := "1 0 0:1 / / rw - ext4 /dev/root rw\n2 1 0:2 / " + project + " rw - fuse.sshfs waldo:/project rw\n3 2 0:1 /state " + project + "/.claude rw - ext4 /dev/root rw\n"

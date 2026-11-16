@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -341,7 +342,7 @@ func setup(cfg *config.Config, args []string) int {
 		fmt.Fprintf(os.Stderr, "waldo: %v\n", err)
 		return 1
 	}
-	fmt.Printf("✓ B 上已安装 waldo %s（%s/bin/waldo）\n", proto.FullVersion(), cfg.RemoteDirOrDefault())
+	fmt.Printf("✓ B 上已安装 waldo %s（%s，按版本保存）\n", proto.FullVersion(), cfg.RemoteDirOrDefault())
 	var paths []string
 	if *adopt {
 		for _, p := range cfg.Profiles() {
@@ -422,11 +423,17 @@ func profileNeeds(profiles map[string]profile.Profile) []string {
 	return names
 }
 
+var checkLocalSandbox = sandbox.Probe
+
 func doctor(cfg *config.Config) int {
 	bad := 0
 	distro := host.Distro()
 	fmt.Println("A（本机）:")
-	for _, bin := range []string{"ssh", "bwrap"} {
+	localBins := []string{"ssh", "bwrap"}
+	if runtime.GOOS == "darwin" {
+		localBins = []string{"ssh", "/usr/bin/sandbox-exec"}
+	}
+	for _, bin := range localBins {
 		p, err := exec.LookPath(bin)
 		fmt.Printf("  %s %s %s\n", mark(err == nil, false), bin, p)
 		if err != nil {
@@ -436,11 +443,11 @@ func doctor(cfg *config.Config) int {
 			}
 		}
 	}
-	if out, err := exec.Command("bwrap", "--unshare-all", "--ro-bind", "/", "/", "--proc", "/proc", "--dev", "/dev", "true").CombinedOutput(); err != nil {
+	if err := checkLocalSandbox(); err != nil {
 		bad++
-		fmt.Printf("  ✗ bwrap 无法创建沙箱: %s\n", strings.TrimSpace(string(out)))
+		fmt.Printf("  ✗ 本机沙箱验证失败: %v\n", err)
 	} else {
-		fmt.Println("  ✓ bwrap 可以创建沙箱（user/pid/net 命名空间）")
+		fmt.Println("  ✓ 本机沙箱可执行，平台隔离检查通过")
 	}
 	home, _ := os.UserHomeDir()
 	tc := sandbox.DetectToolchains(home)

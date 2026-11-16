@@ -359,13 +359,20 @@ func (h *host) mount(m, dir string) error {
 	for _, option := range h.idMaps.options() {
 		args = append(args, "-o", option)
 	}
-	args = append(args, ":"+m, dir)
+	source := m
+	if actual, ok := h.hello.ExportSources[m]; ok {
+		if !filepath.IsAbs(actual) {
+			return fmt.Errorf("invalid export source")
+		}
+		source = actual
+	}
+	args = append(args, ":"+source, dir)
 	cmd := exec.Command("sshfs", args...)
 	cmd.Stdin = mountInput
 	cmd.Stdout = mountOutput
 	var stderr strings.Builder
 	cmd.Stderr = &limitedWriter{w: &stderr, n: 4096}
-	cmd.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGTERM}
+	cmd.SysProcAttr = sshfsProcessAttrs()
 	if err := cmd.Start(); err != nil {
 		mountStream.Close()
 		st.Close()

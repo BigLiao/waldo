@@ -39,11 +39,19 @@ func run(stdin string, name string, args ...string) (string, int) {
 }
 
 func main() {
+	for len(os.Args) > 1 && strings.HasPrefix(os.Args[1], "--disallowedTools=") {
+		os.Args = append(os.Args[:1], os.Args[2:]...)
+	}
 	if len(os.Args) < 2 {
 		fmt.Println("usage: fakeagent probe|ownership|metadata [ttl-seconds]|tty|adopt")
 		os.Exit(2)
 	}
 	switch os.Args[1] {
+	case "cross-platform":
+		if err := crossPlatformProbe(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
 	case "bash-location":
 		out, code := run("", "bash", "-c", "readlink /proc/self/ns/net")
 		result("bash_netns", out)

@@ -11,7 +11,9 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/hashicorp/yamux"
@@ -39,8 +41,9 @@ type Sandbox struct {
 	MetadataCacheTTL time.Duration
 	ContentCacheTTL  time.Duration
 
-	stop func()
-	sess *yamux.Session
+	native *nativeRuntime
+	stop   func()
+	sess   *yamux.Session
 }
 
 // SandboxOptions configures StartSandbox.
@@ -105,7 +108,10 @@ func BaseEnv(home, dataDir string, extra []string) []string {
 
 // ProxyEnv is forced onto every process executed in the sandbox.
 func ProxyEnv() []string {
-	u := fmt.Sprintf("http://127.0.0.1:%d", ProxyPort)
+	return proxyEnvURL(fmt.Sprintf("http://127.0.0.1:%d", ProxyPort))
+}
+
+func proxyEnvURL(u string) []string {
 	return []string{
 		"HTTP_PROXY=" + u, "HTTPS_PROXY=" + u, "http_proxy=" + u, "https_proxy=" + u,
 		"ALL_PROXY=" + u, "all_proxy=" + u,
@@ -115,8 +121,10 @@ func ProxyEnv() []string {
 }
 
 func newID() string {
-	b := make([]byte, 4)
-	rand.Read(b)
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		panic(fmt.Errorf("session randomness: %w", err))
+	}
 	return hex.EncodeToString(b)
 }
 
@@ -153,10 +161,28 @@ func StartSandbox(o SandboxOptions) (*Sandbox, error) {
 			return nil, err
 		}
 		cleanupContext = func() { os.RemoveAll(dir) }
-		if err := os.WriteFile(filepath.Join(dir, "waldo.md"), o.ContextGuide, 0o444); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, "waldo.md"), o.ContextGuide, 0o600); err != nil {
 			return nil, err
 		}
 		spec.ContextDir = dir
+	}
+	policy := netpolicy.New(o.Policy, o.Audit)
+	var native *nativeRuntime
+	if runtime.GOOS == "darwin" {
+		native, err = prepareNative(&o, &spec, &base, policy)
+		if err != nil {
+			return nil, err
+		}
+		defer func() {
+			if !keepContext {
+				native.Close()
+			}
+		}()
+	}
+	if spec.ContextDir != "" {
+		if err := os.Chmod(filepath.Join(spec.ContextDir, "waldo.md"), 0444); err != nil {
+			return nil, err
+		}
 	}
 	cmd, err := sandbox.Default().Command(spec)
 	if err != nil {
@@ -182,9 +208,13 @@ func StartSandbox(o SandboxOptions) (*Sandbox, error) {
 	go func() { cmd.Wait(); close(waited) }()
 	stop := func() {
 		stdin.Close()
+		grace := 500 * time.Millisecond
+		if native != nil {
+			grace = 5 * time.Second
+		}
 		select {
 		case <-waited:
-		case <-time.After(500 * time.Millisecond):
+		case <-time.After(grace):
 			cmd.Process.Kill()
 			<-waited
 		}
@@ -194,16 +224,25 @@ func StartSandbox(o SandboxOptions) (*Sandbox, error) {
 		stop()
 		return nil, err
 	}
-	sb := &Sandbox{Project: o.Project, Audit: o.Audit, MetadataCacheTTL: o.Policy.MetadataCacheTTL, ContentCacheTTL: o.Policy.ContentCacheTTL, sess: sess}
-	sb.stop = func() { sess.Close(); stop(); cleanupContext() }
-	sb.Policy = netpolicy.New(o.Policy, o.Audit)
-	sb.Fwd = &netpolicy.Forwarder{
-		Mode:    o.Policy.Ports,
-		Audit:   o.Audit,
-		OnState: o.OnPorts,
-		Dial: func(port int) (io.ReadWriteCloser, error) {
-			return sb.Open(proto.Header{Kind: proto.KindDial, Port: port})
-		},
+	sb := &Sandbox{Project: o.Project, Audit: o.Audit, MetadataCacheTTL: o.Policy.MetadataCacheTTL, ContentCacheTTL: o.Policy.ContentCacheTTL, sess: sess, native: native}
+	sb.stop = sync.OnceFunc(func() {
+		sess.Close()
+		stop()
+		if native != nil {
+			native.Close()
+		}
+		cleanupContext()
+	})
+	sb.Policy = policy
+	if native == nil {
+		sb.Fwd = &netpolicy.Forwarder{
+			Mode:    o.Policy.Ports,
+			Audit:   o.Audit,
+			OnState: o.OnPorts,
+			Dial: func(port int) (io.ReadWriteCloser, error) {
+				return sb.Open(proto.Header{Kind: proto.KindDial, Port: port})
+			},
+		}
 	}
 	ctl, err := sess.OpenStream()
 	if err != nil {
@@ -211,6 +250,15 @@ func StartSandbox(o SandboxOptions) (*Sandbox, error) {
 		return nil, err
 	}
 	cfg := proto.SandboxConfig{BaseEnv: base, ExecEnv: ProxyEnv(), ProxyPort: ProxyPort, HostPorts: o.Policy.HostPorts, Mkdirs: o.Mkdirs}
+	if native != nil {
+		cfg.Native = true
+		cfg.ProxyPort = 0
+		cfg.HostPorts = nil
+		cfg.ExecEnv = native.env
+		if spec.ContextDir != "" {
+			cfg.ContextFile = filepath.Join(spec.ContextDir, "waldo.md")
+		}
+	}
 	if spec.ContextDir != "" {
 		cfg.ContextProject = o.Project
 		cfg.InstructionFiles = o.Policy.InstructionFiles
@@ -241,7 +289,9 @@ func StartSandbox(o SandboxOptions) (*Sandbox, error) {
 			if err := proto.ReadMsg(ctl, &ev); err != nil {
 				return
 			}
-			sb.Fwd.Update(ev.Ports)
+			if sb.Fwd != nil {
+				sb.Fwd.Update(ev.Ports)
+			}
 		}
 	}()
 	go sb.acceptLoop()
@@ -293,7 +343,7 @@ func (sb *Sandbox) Open(h proto.Header) (*yamux.Stream, error) {
 	return st, nil
 }
 
-// Close tears the sandbox down; every process in it dies.
+// Close releases session resources. Native daemon cleanup has the documented limits.
 func (sb *Sandbox) Close() {
 	if sb.Fwd != nil {
 		sb.Fwd.Close()
@@ -319,4 +369,21 @@ func (sb *Sandbox) LookPath(name string) string {
 		}
 	}
 	return ""
+}
+
+// ExportPath maps a Linux logical runtime root to its native A path.
+func (sb *Sandbox) ExportPath(p string) string {
+	if sb.native != nil {
+		if actual, ok := sb.native.paths[p]; ok {
+			return actual
+		}
+	}
+	return p
+}
+
+func (sb *Sandbox) ExportSources() map[string]string {
+	if sb.native != nil {
+		return sb.native.sources
+	}
+	return nil
 }

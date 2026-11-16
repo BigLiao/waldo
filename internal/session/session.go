@@ -290,6 +290,15 @@ func Run(o Options) int {
 	sb.Observe = pol.ObserveEnabled
 	sb.ModelTelemetry = o.Profile.Telemetry
 
+	for i, p := range mounts {
+		mounts[i] = sb.ExportPath(p)
+	}
+	for i, p := range o.readOnlyMounts {
+		o.readOnlyMounts[i] = sb.ExportPath(p)
+	}
+	if pol.ContextEnabled {
+		o.readOnlyMounts = append(o.readOnlyMounts, sb.ExportPath(proto.ContextDir))
+	}
 	code := runRemote(o, host, sb, id, cwd, project, mounts, al)
 
 	reportProtected(snap, al)
@@ -356,9 +365,10 @@ func runRemote(o Options, host string, sb *Sandbox, id, cwd, project string, mou
 
 	interactive := term.IsTerminal(0) && term.IsTerminal(1)
 	hello := proto.Hello{
-		ExecMode: o.ExecMode,
-		Observe:  sb.Observe,
-		Paseo:    o.paseoBroker != nil, ReadOnlyMounts: o.readOnlyMounts,
+		ExportSources: sb.ExportSources(),
+		ExecMode:      o.ExecMode,
+		Observe:       sb.Observe,
+		Paseo:         o.paseoBroker != nil, ReadOnlyMounts: o.readOnlyMounts,
 		Version: proto.FullVersion(), Session: id, Profile: o.Profile.Wire(), Argv: o.Args,
 		Cwd: cwd, Project: project, Mounts: mounts, Facts: sb.Facts, Interactive: interactive,
 		TimeUnixMs:              time.Now().UnixMilli(),
@@ -573,7 +583,9 @@ func relayAgentIOCancelable(st io.ReadWriteCloser, interactive bool, rc *relayRe
 			if cancelReconnect != nil && cancelReconnect() {
 				return
 			}
-			fw.Write(proto.FSignal, []byte{byte(sig)})
+			if wire := proto.EncodeSignal(sig); wire != 0 {
+				fw.Write(proto.FSignal, []byte{byte(wire)})
+			}
 		}
 	}()
 	if !interactive && term.IsTerminal(0) {

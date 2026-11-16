@@ -2,15 +2,16 @@ package session
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
-	"reflect"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/creack/pty"
-	"golang.org/x/term"
 
 	"waldo/internal/proto"
 	"waldo/internal/util"
@@ -65,7 +66,7 @@ func TestTerminalRelayChild(t *testing.T) {
 	if ending == "" {
 		return
 	}
-	before, err := term.GetState(0)
+	before, err := terminalAttributes()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,9 +91,9 @@ func TestTerminalRelayChild(t *testing.T) {
 	if got := relayAgentIOCancelable(util.RWC{R: input, W: io.Discard}, true, rc); got != want {
 		t.Errorf("exit code %d, want %d", got, want)
 	}
-	after, err := term.GetState(0)
-	if err != nil || !reflect.DeepEqual(before, after) {
-		t.Errorf("tty attributes not restored: %v", err)
+	after, err := terminalAttributes()
+	if err != nil || before != after {
+		t.Errorf("tty attributes not restored: %v before=%q after=%q", err, before, after)
 	}
 }
 
@@ -110,4 +111,21 @@ func TestReconnectNoticeStaysOnBottomRow(t *testing.T) {
 	if got := truncateCells("ab连接", 5); got != "ab连" {
 		t.Fatalf("truncateCells = %q", got)
 	}
+}
+
+// stty serializes meaningful termios fields, excluding Darwin ioctl padding.
+func terminalAttributes() (string, error) {
+	cmd := exec.Command("stty", "-g")
+	cmd.Stdin = os.Stdin
+	out, err := cmd.Output()
+	fields := strings.Split(string(out), ":")
+	for i, f := range fields {
+		if strings.HasPrefix(f, "lflag=") {
+			flags, e := strconv.ParseUint(strings.TrimPrefix(f, "lflag="), 16, 64)
+			if e == nil {
+				fields[i] = fmt.Sprintf("lflag=%x", flags&^uint64(syscall.PENDIN))
+			}
+		}
+	}
+	return strings.Join(fields, ":"), err
 }

@@ -442,6 +442,7 @@ func Main(args []string) int {
 	a, e := Decode(args[0], raw)
 	var result any
 	if e == nil {
+		a.Path = nativeAlias(a.Path)
 		rg := "rg"
 		if len(args) == 3 {
 			rg = args[2]
@@ -456,4 +457,23 @@ func Main(args []string) int {
 		return 1
 	}
 	return 0
+}
+
+// Native skill aliases are presentation inside the sandbox, never an access
+// check. Kernel filesystem policy still applies to the mapped destination.
+func nativeAlias(path string) string {
+	var roots map[string]string
+	if raw := os.Getenv("WALDO_FILE_ALIASES"); len(raw) <= 65536 {
+		json.Unmarshal([]byte(raw), &roots)
+	}
+	best := ""
+	for root := range roots {
+		if filepath.IsAbs(root) && (path == root || strings.HasPrefix(path, root+"/")) && len(root) > len(best) {
+			best = root
+		}
+	}
+	if best != "" && filepath.IsAbs(roots[best]) {
+		return filepath.Join(roots[best], strings.TrimPrefix(path, best))
+	}
+	return path
 }

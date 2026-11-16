@@ -41,3 +41,27 @@ jobs:
         run: go mod verify
       - name: Vet and test
         run: make test
+
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Verify dependencies and native sandbox
+        run: |
+          go mod verify
+          test -x /usr/bin/sandbox-exec
+          go vet ./...
+          go test -p 2 -count=1 ./internal/... ./test/install ./test/native
+      - name: Cross-build all supported platforms
+        run: |
+          for platform in linux darwin; do
+            for architecture in amd64 arm64; do
+              GOOS="$platform" GOARCH="$architecture" CGO_ENABLED=0 go build ./...
+            done
+          done

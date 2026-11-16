@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -50,6 +51,19 @@ func fail(st io.WriteCloser, fw *proto.FrameWriter, code int, format string, a .
 // the connection dropped: the whole process group is killed. After a normal
 // exit, background processes keep running (until the session ends).
 func runExec(st io.ReadWriteCloser, req *proto.ExecReq, execEnv []string) {
+	if runtime.GOOS == "darwin" && req.Path == "/run/waldo/waldo" {
+		if len(req.Argv) < 2 || req.Argv[1] != "host-file-tool" {
+			return
+		}
+		exe, err := os.Executable()
+		if err != nil {
+			return
+		}
+		copyReq := *req
+		req = &copyReq
+		req.Path = exe
+		req.Argv = append([]string{exe}, req.Argv[1:]...)
+	}
 	fw := proto.NewFrameWriter(st)
 	if len(req.Argv) == 0 || req.Path == "" || !strings.HasPrefix(req.Path, "/") {
 		fail(st, fw, 126, "invalid exec request")
@@ -111,6 +125,10 @@ func runExec(st io.ReadWriteCloser, req *proto.ExecReq, execEnv []string) {
 		outs = []io.Reader{outR, errR}
 	}
 	pgid := cmd.Process.Pid
+	if runtime.GOOS == "darwin" {
+		nativeJobs.add(pgid)
+		defer nativeJobs.prune()
+	}
 	var exited atomic.Bool
 
 	// Output pumps.
@@ -147,7 +165,9 @@ func runExec(st io.ReadWriteCloser, req *proto.ExecReq, execEnv []string) {
 				}
 			case proto.FSignal:
 				if len(p) == 1 && p[0] > 0 && p[0] < 65 {
-					syscall.Kill(-pgid, syscall.Signal(p[0]))
+					if sig, ok := proto.DecodeSignal(int(p[0])); ok {
+						syscall.Kill(-pgid, sig)
+					}
 				}
 			case proto.FResize:
 				var rz proto.Resize
@@ -173,8 +193,8 @@ func runExec(st io.ReadWriteCloser, req *proto.ExecReq, execEnv []string) {
 		var ee *exec.ExitError
 		if errors.As(err, &ee) {
 			if ws, ok := ee.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
-				ex.Signal = int(ws.Signal())
-				ex.Code = 128 + ex.Signal
+				ex.Signal = proto.EncodeSignal(ws.Signal())
+				ex.Code = 128 + int(ws.Signal())
 			} else {
 				ex.Code = ee.ExitCode()
 			}

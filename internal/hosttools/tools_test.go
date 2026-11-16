@@ -222,3 +222,12 @@ func TestNotebookEdits(t *testing.T) {
 		t.Fatal(string(b))
 	}
 }
+
+func TestNativeAliasUsesLongestDirectoryPrefix(t *testing.T) {
+	t.Setenv("WALDO_FILE_ALIASES", `{"/logical/skill":"/staged/skill","/logical/skill/nested":"/staged/nested"}`)
+	for in, want := range map[string]string{"/logical/skill/SKILL.md": "/staged/skill/SKILL.md", "/logical/skill/nested/ref.txt": "/staged/nested/ref.txt", "/logical/skill-other/file": "/logical/skill-other/file"} {
+		if got := nativeAlias(in); got != want {
+			t.Errorf("%s => %s want %s", in, got, want)
+		}
+	}
+}

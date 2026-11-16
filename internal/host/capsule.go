@@ -172,7 +172,7 @@ func (h *host) capsuleArgs(agentHome string, mnts []string, stubs map[string]str
 	if hl.ExecMode == proto.ExecRemote || hl.ExecMode == proto.ExecHostMCP {
 		a = append(a, remoteRuntimeArgs()...)
 	}
-	if hl.ExecMode == proto.ExecHostMCP {
+	if hl.ExecMode == proto.ExecHostMCP || hl.Facts.OS == "darwin" {
 		a = append(a, "--tmpfs", "/tmp")
 	}
 
@@ -282,10 +282,16 @@ func (h *host) agentEnv() []string {
 	for _, k := range keys {
 		env = util.EnvSet(env, k, hl.Profile.Env[k])
 	}
+	var missingCredentials []string
 	for _, k := range hl.Profile.Scrub {
 		if v, ok := os.LookupEnv(k); ok {
 			env = util.EnvSet(env, k, v)
+		} else {
+			missingCredentials = append(missingCredentials, k)
 		}
+	}
+	for key, value := range loginCredentials(missingCredentials) {
+		env = util.EnvSet(env, key, value)
 	}
 	if h.modelObservation != nil {
 		env = util.EnvFilter(env, func(k string) bool {
@@ -329,8 +335,12 @@ func (h *host) agentEnv() []string {
 		env = util.EnvSet(env, "WALDO_TOOL_OBSERVER", h.toolObservation.URL)
 	}
 	for _, m := range hl.Mounts {
-		if m == proto.ContextDir {
-			env = util.EnvSet(env, "WALDO_CONTEXT", proto.ContextFile)
+		contextFile := hl.Facts.ContextFile
+		if contextFile == "" {
+			contextFile = proto.ContextFile
+		}
+		if m == filepath.Dir(contextFile) {
+			env = util.EnvSet(env, "WALDO_CONTEXT", contextFile)
 		}
 	}
 	return env
@@ -453,7 +463,9 @@ func (h *host) runAgent(cmd *exec.Cmd, st io.ReadWriteCloser) int {
 				}
 			case proto.FSignal:
 				if len(p) == 1 && p[0] > 0 && p[0] < 65 {
-					syscall.Kill(-pgid, syscall.Signal(p[0]))
+					if sig, ok := proto.DecodeSignal(int(p[0])); ok {
+						syscall.Kill(-pgid, sig)
+					}
 				}
 			case proto.FResize:
 				var rz proto.Resize
@@ -475,8 +487,8 @@ func (h *host) runAgent(cmd *exec.Cmd, st io.ReadWriteCloser) int {
 		var ee *exec.ExitError
 		if errors.As(err, &ee) {
 			if ws, ok := ee.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
-				ex.Signal = int(ws.Signal())
-				ex.Code = 128 + ex.Signal
+				ex.Signal = proto.EncodeSignal(ws.Signal())
+				ex.Code = 128 + int(ws.Signal())
 			} else {
 				ex.Code = ee.ExitCode()
 			}

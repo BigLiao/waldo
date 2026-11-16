@@ -35,7 +35,12 @@ func TestHostMCPReusesSessionAndKeepsAEnvironment(t *testing.T) {
 		h := &host{sess: remote, hello: remoteHello(), scrub: map[string]bool{"ANTHROPIC_API_KEY": true}}
 		h.hello.ExecMode = mode
 		h.hello.Facts.Env = append(h.hello.Facts.Env, "ANTHROPIC_API_KEY=must-stay-hidden")
-		socket := filepath.Join(t.TempDir(), "sock")
+		dir, err := os.MkdirTemp("/tmp", "waldo-mcp-")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { os.RemoveAll(dir) })
+		socket := filepath.Join(dir, "sock")
 		ln, err := net.Listen("unix", socket)
 		if err != nil {
 			t.Fatal(err)

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -16,7 +17,12 @@ import (
 
 func execSocket(t *testing.T, serve func(net.Conn)) string {
 	t.Helper()
-	socket := filepath.Join(t.TempDir(), "sock")
+	dir, err := os.MkdirTemp("/tmp", "waldo-exec-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	socket := filepath.Join(dir, "sock")
 	ln, err := net.Listen("unix", socket)
 	if err != nil {
 		t.Fatal(err)

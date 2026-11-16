@@ -150,3 +150,11 @@ func fakeSSH(t *testing.T, body string) string {
 	t.Setenv("WALDO_TEST_SSH_ARGS", argsPath)
 	return argsPath
 }
+
+func TestBinaryForRejectsUnsupportedOrUntrustedPlatformNames(t *testing.T) {
+	for _, tc := range [][2]string{{"Darwin", "arm64"}, {"Linux", "../../private-file"}, {"../../private", "amd64"}, {"Linux", "riscv64"}} {
+		if _, err := binaryFor(tc[0], tc[1]); err == nil {
+			t.Errorf("accepted remote platform %q", tc)
+		}
+	}
+}

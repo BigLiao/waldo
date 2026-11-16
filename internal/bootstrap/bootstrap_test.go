@@ -56,7 +56,7 @@ func (f *fixture) link(name, target string) {
 func (f *fixture) present(names ...string) {
 	f.t.Helper()
 	for _, name := range names {
-		f.link(name, "/bin/true")
+		f.link(name, "/usr/bin/true")
 	}
 }
 
@@ -73,7 +73,7 @@ func (f *fixture) manager(name string) {
 if [ "$INSTALL_FAIL" != 0 ]; then exit 23; fi
 if [ "${1:-}" = update ]; then exit 0; fi
 for command in $INSTALL_COMMANDS; do
-    /bin/ln -sf /bin/true "$FAKE_BIN/$command"
+    /bin/ln -sf /usr/bin/true "$FAKE_BIN/$command"
 done`)
 }
 
@@ -280,8 +280,8 @@ func TestInstallationFailuresRemainFailures(t *testing.T) {
 			case "unknown-manager":
 				want = "未找到支持的包管理器"
 			case "unsupported-os":
-				t.Setenv("TEST_OS", "Darwin")
-				want = "只支持 Linux"
+				t.Setenv("TEST_OS", "FreeBSD")
+				want = "B 只支持 Linux"
 			case "unknown-command":
 				needs = []string{"custom-agent-tool"}
 				want = "无法自动安装依赖命令 custom-agent-tool"

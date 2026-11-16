@@ -70,6 +70,7 @@ func TestConfigsRejectUnscopedAndNonlocalTargets(t *testing.T) {
 
 func TestConfigFileAndSkillDiscovery(t *testing.T) {
 	home := t.TempDir()
+	home, _ = filepath.EvalSymlinks(home)
 	p := filepath.Join(home, "mcp.json")
 	os.WriteFile(p, []byte(configFor("http://127.0.0.1:6767/mcp/agents?callerAgentId=one")), 0600)
 	if out, _, err := Configs([]string{"--mcp-config", p}); err != nil || strings.Contains(strings.Join(out, " "), p) {

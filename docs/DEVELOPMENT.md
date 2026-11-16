@@ -9,12 +9,15 @@
 ```sh
 make dev       # ./waldo，版本号带二进制哈希：每次重编译后会自动重装到 B
 make build     # ./waldo，版本号用 git 提交号
-make release   # dist/waldo-linux-{amd64,arm64}；B 的架构与 A 不同时，A 会找同目录下的这些文件
+make build-pair BUILD=dev-unique-id # 本机 A 和两个 Linux B 配套程序，版本相同
+make release   # dist/waldo-{linux,darwin}-{amd64,arm64}，四种产物共享 BUILD
 ```
 
-`make release` 同时复制根目录的 `install.sh`，并为两个二进制和安装脚本生成 `dist/SHA256SUMS`。安装脚本默认从 GitHub latest 固定一个稳定版 tag，校验两个架构的文件后安装；`--version` 可指定版本，`--bin-dir` 可指定目录，不自动调用 setup 或修改用户配置。
+`make release` 同时复制根目录的 `install.sh`，并为四个二进制和安装脚本生成 `dist/SHA256SUMS`。安装脚本默认从 GitHub latest 固定一个稳定版 tag，校验两个架构的文件后安装；`--version` 可指定版本，`--bin-dir` 可指定目录，不自动调用 setup 或修改用户配置。
 
-依赖：A 需要 `ssh`、`bubblewrap`（claude profile 还需要 `rg`、`git`、`bash`）；B 需要 `sshd`、`bubblewrap`、`sshfs`（fuse3）和已安装的 Agent。
+macOS A 的原生沙箱、端口和临时目录差异见 [macOS 使用说明](macos.md)。
+
+依赖：Linux A 需要 `ssh`、`bubblewrap`（claude profile 还需要 `rg`、`git`、`bash`）；B 需要 `sshd`、`bubblewrap`、`sshfs`（fuse3）和已安装的 Agent。
 
 ## CI 与发布
 
@@ -27,21 +30,24 @@ git tag -a v0.1.0 -m "Release v0.1.0"
 git push origin v0.1.0
 ```
 
-`vMAJOR.MINOR.PATCH` tag 会先运行同一套 CI，成功后构建并创建 GitHub Release，附带自动生成的发布说明和四个文件：
+`vMAJOR.MINOR.PATCH` tag 会先运行同一套 CI，成功后构建并创建 GitHub Release，附带自动生成的发布说明和六个文件：
 
 - `waldo-linux-amd64`
 - `waldo-linux-arm64`
+- `waldo-darwin-amd64`
+- `waldo-darwin-arm64`
 - `SHA256SUMS`（SHA256 校验文件）
 - `install.sh`（一键安装脚本）
 
 `v0.2.0-rc.1` 这样的 tag 会发布为 prerelease，不更新 latest。工作流使用自带的 `GITHUB_TOKEN`，发布 job 已声明 `contents: write`，无需配置额外 secret。发布同一 tag 的已有 Release 时会报错，避免覆盖已经发布的二进制。
 
-发布构建从 tag 注入 `VERSION`（去掉 `v` 前缀），从提交号注入共享 `BUILD`，例如 `waldo version` 输出 `0.2.0-rc.1+<12位提交号>`。本地可用 `make release VERSION=0.2.0-rc.1` 复现；两个架构共享同一个版本，保留跨架构自动安装所需的文件名。
+发布构建从 tag 注入 `VERSION`（去掉 `v` 前缀），从提交号注入共享 `BUILD`，例如 `waldo version` 输出 `0.2.0-rc.1+<12位提交号>`。本地可用 `make release VERSION=0.2.0-rc.1` 复现；四种平台/架构产物共享同一个版本，保留跨架构自动安装所需的文件名。
 
 ## 测试
 
 ```sh
-make test-unit     # 纯单元测试
+make test-unit     # 单元与安装回归
+make test-native   # macOS 真实 Seatbelt 集成回归
 make test-attack   # M0：沙箱攻击回归测试，每个攻击都必须失败（另有正向对照）
 make test-e2e      # M1–M3：用假 Agent 跑通 A → ssh → B 胶囊 → stub → A 全链路
 ```
@@ -93,3 +99,11 @@ docs/                 SECURITY.md、profiles.md
 - **来自 B 的所有终端输出都过滤**：不仅是 Agent 的 io 流，ssh 转发的 B 端 stderr、握手错误信息、doctor 报告字段也都经过 `termfilter`（有回归测试：B 端二进制被换成往 stderr 写 OSC 52 的脚本）。
 - **限时重连**：A/B 之间的 yamux 下方增加 `internal/reconnect` 字节续传层，以消费偏移确认、接收偏移续接，避免重放已接收的数据；B 由独立的每会话进程持有 Agent 和挂载，SSH 子进程只做转接。检测到断线后保留 90 秒，超时清理；每方向 4 MiB 缓冲，满时背压。重试只接回原会话，不创建新 Agent。相关回归覆盖半包、丢失确认、连续重连、SFTP 打开句柄、Agent PID 保持、实际 SSH 重试循环和超时终止。完整挂载回归见 `TestReconnectAfterBrokenLink`、`TestCleanupAfterReconnectWindow`（后者需等待完整 90 秒）。
 - 未实现（属于 M5 或之后）：客户端退出后的脱离/重新 attach、`--isolated`（worktree）、macOS 作为 A、自研 FUSE 客户端与缓存。
+
+## B 程序版本与共享 Agent
+
+B 的程序按 `<remote_dir>/bin/<Version+Build 的 SHA256>/waldo` 保存。首次安装校验候选程序的完整版本和摘要，再通过原子发布复用已存在的版本；Open、Run、Probe 和 SSH 重连均选择本次 A 的版本，首版不自动清理旧版本。旧 `bin/waldo` 保留以免影响未升级客户端。
+
+版本目录只隔离 Waldo 程序。Agent HOME、已有 Claude 登录和历史仍按现有机制共享；每个连接的进程、挂载、缓存和工具通道各自持有，不引入设备命名空间。
+
+macOS CI 执行原生单元、安装、Seatbelt 回归，并交叉构建 Linux/Darwin 两种架构。Linux CI 保留攻击与完整回环 E2E。

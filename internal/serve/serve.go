@@ -35,6 +35,9 @@ type server struct {
 
 // Main runs sandbox-serve on stdin/stdout.
 func Main() int {
+	if runtime.GOOS == "darwin" {
+		defer nativeJobs.close()
+	}
 	log.SetFlags(log.Ltime | log.Lmicroseconds)
 	log.SetPrefix("sandbox-serve: ")
 	rwc := util.RWC{R: os.Stdin, W: os.Stdout, C: []io.Closer{os.Stdin, os.Stdout}}
@@ -59,7 +62,11 @@ func Main() int {
 		return 1
 	}
 	if s.cfg.ContextProject != "" {
-		s.view, err = projection.New(s.cfg.ContextProject, s.cfg.InstructionFiles)
+		contextFile := s.cfg.ContextFile
+		if contextFile == "" {
+			contextFile = proto.ContextFile
+		}
+		s.view, err = projection.NewWithContext(s.cfg.ContextProject, s.cfg.InstructionFiles, contextFile)
 		if err != nil {
 			log.Printf("session instructions: %v", err)
 			return 1
@@ -76,7 +83,9 @@ func Main() int {
 		log.Print(err)
 		return 1
 	}
-	go s.scanPorts(ctl)
+	if !s.cfg.Native {
+		go s.scanPorts(ctl)
+	}
 	for {
 		st, err := sess.AcceptStream()
 		if err != nil {
@@ -172,7 +181,7 @@ func (s *server) facts() proto.Facts {
 		env = util.EnvSet(env, "SHELL", "/bin/sh")
 	}
 	hn, _ := os.Hostname()
-	return proto.Facts{Home: home, Hostname: hn, OS: runtime.GOOS, Arch: runtime.GOARCH, UID: os.Getuid(), GID: os.Getgid(), Env: env, PathDirs: dirs}
+	return proto.Facts{ContextFile: s.cfg.ContextFile, Home: home, Hostname: hn, OS: runtime.GOOS, Arch: runtime.GOARCH, UID: os.Getuid(), GID: os.Getgid(), Env: env, PathDirs: dirs}
 }
 
 func (s *server) markOwn(port int) {

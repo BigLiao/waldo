@@ -2,6 +2,7 @@ package cli
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,6 +14,9 @@ import (
 // No real package manager, sudo, SSH connection, or user configuration is used.
 func setupTestEnv(t *testing.T, bwrapInstalled bool) string {
 	t.Helper()
+	savedProbe := checkLocalSandbox
+	checkLocalSandbox = func() error { return exec.Command("bwrap", "--probe").Run() }
+	t.Cleanup(func() { checkLocalSandbox = savedProbe })
 	root := t.TempDir()
 	bin := filepath.Join(root, "bin")
 	home := filepath.Join(root, "home")

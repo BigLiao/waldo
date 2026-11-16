@@ -8,7 +8,7 @@
 | `args` | 放在用户参数之前的固定参数 |
 | `env` | 给 Agent 进程的额外环境变量 |
 | `shared` | Agent 进程写、而命令执行侧（A）要读的路径，会投射到 A 沙箱（`/tmp` 和项目目录总是投射） |
-| `scrub` | 凭证类变量：保留在 B 上的 Agent 环境里，但绝不随命令带到 A |
+| `scrub` | B 侧凭证/服务配置变量：从 B 进程或 B 登录 shell 取得，只进入 Agent 环境，随命令转发到 A 前清除 |
 | `needs` | `waldo doctor` 在 A 上检查的命令 |
 | `state` | Agent 在 B 上的状态路径（`~/` 开头）：doctor 据此判断是否已登录；`waldo setup` 默认把其中已存在的**目录**绑定进胶囊（与 B 上原生 Agent 共用），**文件**首次复制到胶囊 HOME，已有非空副本保留（单文件绑定会让 rename 覆盖失败） |
 | `mcp_config_flag` | `--paseo` 和远端命令模式使用的 MCP 配置参数；目前支持 Claude 风格的 `--mcp-config` JSON/文件参数 |
@@ -51,3 +51,5 @@ state  = ["~/.codex"]
 |---|---|---|
 | Claude Code | 2.1.322 | `-p` 与交互式 TUI 均可用；Bash 工具在 A 沙箱执行；Write 工具（临时文件 + rename）经 FUSE 落到 A；shell 快照在 `~/.claude/shell-snapshots`、cwd 记录文件在 `/tmp`，与 profile 一致 |
 | Codex | — | 未在本机实测（未安装）；`--sandbox danger-full-access` 参数沿用设计假设 |
+
+内置 Claude profile 同时保留 B 的 ANTHROPIC_BASE_URL、ANTHROPIC_MODEL 和默认模型别名配置；Codex 保留 OPENAI_BASE_URL。登录 shell 的读取只在 B 进行，限定于 scrub 中合法的变量名，不把完整环境传回 A。

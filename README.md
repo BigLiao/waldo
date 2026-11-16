@@ -20,7 +20,7 @@ waldo 让 Claude Code、Codex 等编程 Agent 运行在你自己的服务器上�
 
 - 一台你能用 SSH 登录的 Linux 服务器（`ssh me@my-server` 能直接连上）；
 - 在这台服务器上安装好要使用的 Agent，例如 Claude Code；
-- 你正在用的这台电脑同样是 Linux。
+- 你正在用的这台电脑是 Linux，或使用主分支源码构建的 macOS 客户端（见 [macOS 使用说明](docs/macos.md)）。
 
 其余依赖交给 `waldo setup` 自动补齐，过程中可能需要输入 sudo 密码。
 
@@ -60,6 +60,8 @@ git clone https://github.com/BigLiao/waldo.git
 cd waldo
 make build
 ```
+
+macOS 连接 Linux B 时，使用 `make build-pair BUILD="dev-$(date +%s)"` 构建匹配的本机程序与两个 Linux 配套程序，并将它们放在同一目录；稳定 Release 尚未包含本次 macOS 支持。
 
 得到的 `./waldo` 是一个独立的二进制文件，把它放进 `PATH` 中的任一目录即可，例如：
 

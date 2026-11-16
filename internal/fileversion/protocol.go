@@ -34,7 +34,7 @@ type Info struct {
 func FromStat(st os.FileInfo) Info {
 	i := Info{Version: Version{ModifiedNS: st.ModTime().UnixNano(), Size: st.Size()}, Mode: uint32(st.Mode().Perm()) | 0100000, UID: uint32(os.Getuid()), GID: uint32(os.Getgid())}
 	if s, ok := st.Sys().(*syscall.Stat_t); ok {
-		i.Device, i.Inode, i.Mode, i.UID, i.GID = uint64(s.Dev), uint64(s.Ino), s.Mode, s.Uid, s.Gid
+		i.Device, i.Inode, i.Mode, i.UID, i.GID = uint64(s.Dev), uint64(s.Ino), uint32(s.Mode), s.Uid, s.Gid
 	}
 	return i
 }
