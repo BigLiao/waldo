@@ -30,7 +30,7 @@ func TestRemoteBashAndHostMCPUseDifferentMachinesAndSameFiles(t *testing.T) {
 		}
 	}
 	log, _ := os.ReadFile(filepath.Join(e.AData, "audit.log"))
-	if !strings.Contains(string(log), `"exec_mode":"remote"`) || !strings.Contains(string(log), `"tool":"host_bash"`) || !strings.Contains(string(log), "host-write") || strings.Contains(string(log), "printf remote > remote-write") {
+	if !strings.Contains(string(log), `"exec_mode":"remote"`) || !strings.Contains(string(log), `"tool":"Bash"`) || !strings.Contains(string(log), "host-write") || strings.Contains(string(log), "printf remote > remote-write") {
 		t.Fatalf("unexpected command routing in audit: %s", log)
 	}
 	// A launch flag overrides the global mode, restoring the original stub path.

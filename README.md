@@ -37,7 +37,7 @@ curl -fsSL https://raw.githubusercontent.com/BigLiao/waldo/master/install.sh | s
 指定版本或安装目录：
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/BigLiao/waldo/master/install.sh | sh -s -- --version v0.3.0 --bin-dir "$HOME/.local/bin"
+curl -fsSL https://raw.githubusercontent.com/BigLiao/waldo/master/install.sh | sh -s -- --version v0.3.1 --bin-dir "$HOME/.local/bin"
 ```
 
 安装后运行 `waldo setup me@my-server` 初始化依赖和服务器。脚本安装的是已发布版本；主分支尚未发布的功能可用下方的源码构建方式体验。
