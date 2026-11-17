@@ -47,7 +47,7 @@ func sshfsMountCacheOptions(hello proto.Hello, mount string, contentProxy bool) 
 	if hello.ExecMode == proto.ExecHostMCP && configured > 0 {
 		cacheable := project
 		root := filepath.Clean(mount)
-		if root != "/tmp" && root != proto.ContextDir {
+		if root != "/tmp" && root != proto.ContextDir && (hello.Facts.ContextFile == "" || root != filepath.Dir(hello.Facts.ContextFile)) {
 			for _, path := range hello.ReadOnlyMounts {
 				cacheable = cacheable || root == filepath.Clean(path)
 			}

@@ -7,6 +7,8 @@ package transport
 import (
 	"bufio"
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -159,8 +161,8 @@ func (s *SSH) command(remoteCmd string) *exec.Cmd {
 // bootstrap runs waldo host if the right version is installed, otherwise
 // reports what to install.
 func (s *SSH) bootstrap(sub string) string {
-	return wrap(fmt.Sprintf(`D=%s; B="$D/bin/waldo"; if [ -x "$B" ] && [ "$("$B" version 2>/dev/null)" = %s ]; then exec "$B" host --data-dir "$D" %s; fi; echo "%s $(uname -s) $(uname -m)"`,
-		s.remoteDirExpr(), util.ShellQuote(proto.FullVersion()), sub, proto.NeedInstall))
+	return wrap(fmt.Sprintf(`D=%s; B="$D/bin/%s/waldo"; if [ -x "$B" ] && [ "$("$B" version 2>/dev/null)" = %s ]; then exec "$B" host --data-dir "$D" %s; fi; echo "%s $(uname -s) $(uname -m)"`,
+		s.remoteDirExpr(), versionKey(), util.ShellQuote(proto.FullVersion()), sub, proto.NeedInstall))
 }
 
 // Open starts `waldo host` on B, installing the binary first if needed.
@@ -244,6 +246,9 @@ func binaryFor(unameS, unameM string) (string, error) {
 		return "", err
 	}
 	goos, arch := strings.ToLower(unameS), goArch(unameM)
+	if goos != "linux" || (arch != "amd64" && arch != "arm64") {
+		return "", fmt.Errorf("B 只支持 Linux amd64/arm64，收到 %q/%q", unameS, unameM)
+	}
 	if goos == runtime.GOOS && arch == runtime.GOARCH {
 		return exe, nil
 	}
@@ -265,7 +270,15 @@ func (s *SSH) Install(unameS, unameM string) error {
 		return err
 	}
 	defer f.Close()
-	script := fmt.Sprintf(`set -e; D=%s; mkdir -p "$D/bin"; T="$D/bin/.waldo.$$"; cat > "$T"; chmod 755 "$T"; mv -f "$T" "$D/bin/waldo"; "$D/bin/waldo" version`, s.remoteDirExpr())
+	hash := sha256.New()
+	if _, err := io.Copy(hash, f); err != nil {
+		return err
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
+	digest := hex.EncodeToString(hash.Sum(nil))
+	script := s.installScript(digest)
 	cmd := s.command(wrap(script))
 	cmd.Stdin = f
 	var out bytes.Buffer
@@ -273,13 +286,39 @@ func (s *SSH) Install(unameS, unameM string) error {
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("安装 waldo 到 %s 失败: %w", s.Host, err)
 	}
-	if got := strings.TrimSpace(out.String()); got != proto.FullVersion() && src == mustExe() {
+	if got := strings.TrimSpace(out.String()); got != proto.FullVersion() {
 		return fmt.Errorf("安装后版本不一致: %q", got)
 	}
 	return nil
 }
 
-func mustExe() string { e, _ := os.Executable(); return e }
+// installScript publishes by hard link so concurrent installs cannot replace a
+// version already in use by another connection.
+func (s *SSH) installScript(digest string) string {
+	return fmt.Sprintf(`set -eu
+D=%s
+V="$D/bin/%s"
+mkdir -p "$V"
+T=$(mktemp "$V/waldo-upload.XXXXXXXX")
+trap 'rm -f "$T"' EXIT HUP INT TERM
+cat > "$T"
+chmod 755 "$T"
+expected=%s
+check() {
+ [ "$("$1" version)" = "$expected" ] && [ "$(sha256sum "$1" | cut -d ' ' -f 1)" = %s ]
+}
+check "$T" || { echo 'waldo: candidate binary version or checksum mismatch' >&2; exit 1; }
+if ! ln "$T" "$V/waldo" 2>/dev/null; then
+ check "$V/waldo" || { echo 'waldo: installed immutable binary does not match candidate' >&2; exit 1; }
+fi
+"$V/waldo" version`, s.remoteDirExpr(), versionKey(), util.ShellQuote(proto.FullVersion()), util.ShellQuote(digest))
+}
+
+// versionKey is bounded and safe as a remote directory name even for dev builds.
+func versionKey() string {
+	sum := sha256.Sum256([]byte(proto.FullVersion()))
+	return hex.EncodeToString(sum[:])
+}
 
 // Run runs `waldo <args>` on B (installing first if needed) and returns
 // stdout. Used by doctor/setup.
@@ -289,8 +328,8 @@ func (s *SSH) Run(args []string, stdin []byte) ([]byte, error) {
 		q = append(q, util.ShellQuote(a))
 	}
 	for attempt := 0; attempt < 2; attempt++ {
-		script := fmt.Sprintf(`D=%s; B="$D/bin/waldo"; if [ -x "$B" ] && [ "$("$B" version 2>/dev/null)" = %s ]; then echo OK; exec "$B" %s; fi; echo "%s $(uname -s) $(uname -m)"`,
-			s.remoteDirExpr(), util.ShellQuote(proto.FullVersion()), strings.ReplaceAll(strings.Join(q, " "), "@DATA@", `"$D"`), proto.NeedInstall)
+		script := fmt.Sprintf(`D=%s; B="$D/bin/%s/waldo"; if [ -x "$B" ] && [ "$("$B" version 2>/dev/null)" = %s ]; then echo OK; exec "$B" %s; fi; echo "%s $(uname -s) $(uname -m)"`,
+			s.remoteDirExpr(), versionKey(), util.ShellQuote(proto.FullVersion()), strings.ReplaceAll(strings.Join(q, " "), "@DATA@", `"$D"`), proto.NeedInstall)
 		cmd := s.command(wrap(script))
 		cmd.Stdin = bytes.NewReader(stdin)
 		out, err := cmd.Output()

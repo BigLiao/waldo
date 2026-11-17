@@ -52,4 +52,4 @@ jobs:
           if [[ "$TAG" == *-* ]]; then
             args+=(--prerelease --latest=false)
           fi
-          gh release create "$TAG" dist/waldo-linux-amd64 dist/waldo-linux-arm64 dist/SHA256SUMS dist/install.sh "${args[@]}"
+          gh release create "$TAG" dist/waldo-linux-amd64 dist/waldo-linux-arm64 dist/waldo-darwin-amd64 dist/waldo-darwin-arm64 dist/SHA256SUMS dist/install.sh "${args[@]}"

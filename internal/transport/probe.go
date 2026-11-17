@@ -25,7 +25,7 @@ type ProbeResult struct {
 // the entire operation, including remote diagnostics, with its context.
 func (s *SSH) Probe(ctx context.Context, request []byte) (ProbeResult, error) {
 	var result ProbeResult
-	script := fmt.Sprintf(`D=%s; B="$D/bin/waldo"; if [ ! -x "$B" ]; then echo WALDO-STATUS-MISSING; exit 0; fi; V=$("$B" version 2>/dev/null) || exit 1; printf 'WALDO-STATUS-VERSION %%s\n' "$V"; if [ "$V" = %s ]; then exec "$B" host --data-dir "$D" --doctor; fi`, s.remoteDirExpr(), util.ShellQuote(proto.FullVersion()))
+	script := fmt.Sprintf(`D=%s; B="$D/bin/%s/waldo"; if [ ! -x "$B" ]; then echo WALDO-STATUS-MISSING; exit 0; fi; V=$("$B" version 2>/dev/null) || exit 1; printf 'WALDO-STATUS-VERSION %%s\n' "$V"; if [ "$V" = %s ]; then exec "$B" host --data-dir "$D" --doctor; fi`, s.remoteDirExpr(), versionKey(), util.ShellQuote(proto.FullVersion()))
 	copySSH := *s
 	copySSH.ExtraArgs = append([]string{
 		"-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "-o", "UpdateHostKeys=no",

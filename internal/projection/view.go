@@ -41,6 +41,11 @@ type View struct {
 }
 
 func New(project string, names []string) (*View, error) {
+	return NewWithContext(project, names, proto.ContextFile)
+}
+
+func NewWithContext(project string, names []string, contextFile string) (*View, error) {
+	reference := "Read [waldo.md](" + contextFile + ") for this session's environment, permissions and limitations. <!-- waldo:context -->"
 	root, err := filepath.EvalSymlinks(project)
 	if err != nil {
 		return nil, err
@@ -56,7 +61,7 @@ func New(project string, names []string) (*View, error) {
 			return nil, fmt.Errorf("read instruction file %s: %w", name, err)
 		}
 		// Only append our own line once, including when a project already has it.
-		if !bytes.Contains(data, []byte(Reference)) {
+		if !bytes.Contains(data, []byte(reference)) {
 			data = append([]byte{}, data...)
 			if len(data) > 0 && data[len(data)-1] != '\n' {
 				data = append(data, '\n')
@@ -64,7 +69,7 @@ func New(project string, names []string) (*View, error) {
 			if len(data) > 0 {
 				data = append(data, '\n')
 			}
-			data = append(data, Reference...)
+			data = append(data, reference...)
 			data = append(data, '\n')
 		}
 		v.files[name] = &file{name: name, data: data, mtime: time.Now()}

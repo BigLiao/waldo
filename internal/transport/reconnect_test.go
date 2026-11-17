@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -19,11 +20,14 @@ import (
 // Exercise the real OpenResumable retry loop and real detached host. A local
 // ssh facade executes the remote command, avoiding FUSE and SSH credentials.
 func TestSSHReconnectKeepsControlStream(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("detached host runs on Linux B")
+	}
 	if testing.Short() {
 		t.Skip("builds a real waldo helper")
 	}
 	dir := t.TempDir()
-	bin := filepath.Join(dir, "bin", "waldo")
+	bin := filepath.Join(dir, "bin", versionKey(), "waldo")
 	buildID := strings.TrimPrefix(proto.FullVersion(), proto.Version+"+")
 	build := exec.Command("go", "build", "-ldflags", "-X waldo/internal/proto.Build="+buildID+" -X waldo/internal/proto.Version="+proto.Version, "-o", bin, "../../cmd/waldo")
 	if out, err := build.CombinedOutput(); err != nil {

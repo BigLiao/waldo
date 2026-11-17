@@ -122,18 +122,21 @@ type PathDir struct {
 
 // Facts is what the A sandbox reports about itself.
 type Facts struct {
-	Home     string    `json:"home"`
-	Hostname string    `json:"hostname"`
-	OS       string    `json:"os"`
-	Arch     string    `json:"arch"`
-	UID      int       `json:"uid"`
-	GID      int       `json:"gid"`
-	Env      []string  `json:"env"`
-	PathDirs []PathDir `json:"path_dirs"`
+	ContextFile string    `json:"context_file,omitempty"`
+	Home        string    `json:"home"`
+	Hostname    string    `json:"hostname"`
+	OS          string    `json:"os"`
+	Arch        string    `json:"arch"`
+	UID         int       `json:"uid"`
+	GID         int       `json:"gid"`
+	Env         []string  `json:"env"`
+	PathDirs    []PathDir `json:"path_dirs"`
 }
 
 // SandboxConfig is what the A client tells sandbox-serve at startup.
 type SandboxConfig struct {
+	Native           bool     `json:"native,omitempty"`
+	ContextFile      string   `json:"context_file,omitempty"`
 	BaseEnv          []string `json:"base_env"`
 	ExecEnv          []string `json:"exec_env"` // forced onto every forwarded exec (proxy vars)
 	ProxyPort        int      `json:"proxy_port"`
@@ -164,24 +167,25 @@ type Profile struct {
 
 // Hello is the session description A sends to B.
 type Hello struct {
-	ExecMode                string   `json:"exec_mode,omitempty"`
-	Observe                 bool     `json:"observe,omitempty"`
-	Paseo                   bool     `json:"paseo,omitempty"`
-	ReadOnlyMounts          []string `json:"read_only_mounts,omitempty"`
-	Version                 string   `json:"version"`
-	Session                 string   `json:"session"`
-	Profile                 Profile  `json:"profile"`
-	Argv                    []string `json:"argv"`
-	Cwd                     string   `json:"cwd"`
-	Project                 string   `json:"project"`
-	Mounts                  []string `json:"mounts"` // absolute paths to project from A (project first)
-	Facts                   Facts    `json:"facts"`
-	Interactive             bool     `json:"interactive"`
-	Rows                    uint16   `json:"rows"`
-	Cols                    uint16   `json:"cols"`
-	TimeUnixMs              int64    `json:"time_unix_ms"`
-	MetadataCacheTTLSeconds int64    `json:"metadata_cache_ttl_seconds"`
-	ContentCacheTTLSeconds  int64    `json:"content_cache_ttl_seconds"`
+	ExportSources           map[string]string `json:"export_sources,omitempty"`
+	ExecMode                string            `json:"exec_mode,omitempty"`
+	Observe                 bool              `json:"observe,omitempty"`
+	Paseo                   bool              `json:"paseo,omitempty"`
+	ReadOnlyMounts          []string          `json:"read_only_mounts,omitempty"`
+	Version                 string            `json:"version"`
+	Session                 string            `json:"session"`
+	Profile                 Profile           `json:"profile"`
+	Argv                    []string          `json:"argv"`
+	Cwd                     string            `json:"cwd"`
+	Project                 string            `json:"project"`
+	Mounts                  []string          `json:"mounts"` // absolute paths to project from A (project first)
+	Facts                   Facts             `json:"facts"`
+	Interactive             bool              `json:"interactive"`
+	Rows                    uint16            `json:"rows"`
+	Cols                    uint16            `json:"cols"`
+	TimeUnixMs              int64             `json:"time_unix_ms"`
+	MetadataCacheTTLSeconds int64             `json:"metadata_cache_ttl_seconds"`
+	ContentCacheTTLSeconds  int64             `json:"content_cache_ttl_seconds"`
 }
 
 type HelloAck struct {
@@ -240,7 +244,7 @@ const (
 	FStdinEOF byte = 2
 	FStdout   byte = 3
 	FStderr   byte = 4
-	FSignal   byte = 5 // payload: 1 byte signal number
+	FSignal   byte = 5 // payload: 1 byte Linux signal number
 	FResize   byte = 6 // payload: JSON Resize
 	FExit     byte = 7 // payload: JSON Exit
 	FError    byte = 8 // payload: message for the user's stderr

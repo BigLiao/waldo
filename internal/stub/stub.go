@@ -96,7 +96,9 @@ func Relay(conn io.ReadWriter, req *proto.ExecReq) int {
 				}
 				continue
 			}
-			fw.Write(proto.FSignal, []byte{byte(sig)})
+			if wire := proto.EncodeSignal(sig); wire != 0 {
+				fw.Write(proto.FSignal, []byte{byte(wire)})
+			}
 		}
 	}()
 
@@ -131,8 +133,7 @@ func Relay(conn io.ReadWriter, req *proto.ExecReq) int {
 			cleanup()
 			var ex proto.Exit
 			proto.DecodeJSON(p, &ex)
-			if ex.Signal > 0 {
-				sig := syscall.Signal(ex.Signal)
+			if sig, ok := proto.DecodeSignal(ex.Signal); ok {
 				signal.Reset(sig)
 				syscall.Kill(os.Getpid(), sig)
 				time.Sleep(100 * time.Millisecond)

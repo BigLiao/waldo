@@ -5,15 +5,34 @@ set -eu
 set -f
 
 role=${1:-}
-case "$role" in
-    a) label='A（本机）'; shift; set -- ssh bwrap "$@" ;;
-    b) label='B（服务器）'; shift; set -- bwrap sshfs fusermount3 "$@" ;;
+os=$(uname -s)
+case "$role:$os" in
+    a:Darwin) label='A（本机）'; shift; set -- ssh sandbox-exec "$@" ;;
+    a:Linux) label='A（本机）'; shift; set -- ssh bwrap "$@" ;;
+    b:Linux) label='B（服务器）'; shift; set -- bwrap sshfs fusermount3 "$@" ;;
+    a:*|b:*) printf '%s\n' 'waldo: B 只支持 Linux；A 支持 Linux 和 macOS。' >&2; exit 1 ;;
     *) printf '%s\n' '用法: install.sh a [额外命令...] | install.sh b' >&2; exit 2 ;;
 esac
 
-if [ "$(uname -s)" != Linux ]; then
-    printf '%s\n' 'waldo: 自动安装目前只支持 Linux。' >&2
-    exit 1
+if [ "$os" = Darwin ]; then
+    [ -x /usr/bin/sandbox-exec ] || { printf '%s\n' 'waldo: macOS 缺少系统 sandbox-exec，无法启动沙箱。' >&2; exit 1; }
+    packages=''
+    for dep do
+        [ "$dep" != sandbox-exec ] || continue
+        if command -v "$dep" >/dev/null 2>&1; then continue; fi
+        case "$dep" in
+            rg) package=ripgrep ;;
+            git|bash) package=$dep ;;
+            *) printf 'waldo: 请手动安装缺少的命令 %s\n' "$dep" >&2; exit 1 ;;
+        esac
+        case " $packages " in *" $package "*) ;; *) packages="$packages $package" ;; esac
+    done
+    if [ -n "$packages" ]; then
+        command -v brew >/dev/null 2>&1 || { printf 'waldo: 请安装 Homebrew 后执行 brew install%s\n' "$packages" >&2; exit 1; }
+        brew install $packages
+    fi
+    printf '✓ %s依赖已齐全\n' "$label"
+    exit 0
 fi
 
 required=''

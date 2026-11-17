@@ -65,6 +65,13 @@ printf '%%s\n' "$0" >> "$INSTALL_TEST_ROOT/executed-path"
 printf '%%s\n' '1.2.3+0123456789ab'
 `, arch), 0o755)
 	}
+	for _, arch := range []string{"amd64", "arm64"} {
+		b, err := os.ReadFile(filepath.Join(f.assets, "waldo-linux-"+arch))
+		if err != nil {
+			t.Fatal(err)
+		}
+		write(t, filepath.Join(f.assets, "waldo-darwin-"+arch), string(b)+"# Darwin\n", 0o755)
+	}
 	f.checksums(t)
 	return f
 }
@@ -79,7 +86,7 @@ func write(t *testing.T, path, text string, mode os.FileMode) {
 func (f fixture) checksums(t *testing.T) {
 	t.Helper()
 	var sums strings.Builder
-	for _, asset := range []string{"waldo-linux-amd64", "waldo-linux-arm64"} {
+	for _, asset := range []string{"waldo-linux-amd64", "waldo-linux-arm64", "waldo-darwin-amd64", "waldo-darwin-arm64"} {
 		b, err := os.ReadFile(filepath.Join(f.assets, asset))
 		if err != nil {
 			t.Fatal(err)
@@ -228,7 +235,7 @@ func TestFailuresPreserveExistingInstallation(t *testing.T) {
 
 func TestRejectUnsupportedPlatformsAndInvalidVersionsBeforeDownload(t *testing.T) {
 	for _, tc := range []struct{ env, args []string }{
-		{env: []string{"INSTALL_TEST_OS=Darwin"}}, {env: []string{"INSTALL_TEST_ARCH=riscv64"}},
+		{env: []string{"INSTALL_TEST_OS=FreeBSD"}}, {env: []string{"INSTALL_TEST_ARCH=riscv64"}},
 		{args: []string{"--version=../../other"}}, {args: []string{"--version=v1.2.3;touch pwned"}},
 		{args: []string{"--version="}}, {args: []string{"--bin-dir="}}, {args: []string{"--unknown"}},
 		{args: []string{"--bin-dir", "--help"}}, {args: []string{"--version", "--bin-dir"}},
@@ -294,5 +301,37 @@ func TestUnexpectedLatestRedirectDoesNotInstall(t *testing.T) {
 		if strings.Count(string(fetches), "\n") != 1 {
 			t.Fatal("unexpected redirect resulted in asset downloads")
 		}
+	}
+}
+
+func TestInstallMacKeepsBothLinuxCompanions(t *testing.T) {
+	for _, arch := range []string{"amd64", "arm64"} {
+		t.Run(arch, func(t *testing.T) {
+			f := newFixture(t)
+			out, err := f.run(t, []string{"INSTALL_TEST_OS=Darwin", "INSTALL_TEST_ARCH=" + arch})
+			if err != nil {
+				t.Fatalf("Mac install: %v: %s", err, out)
+			}
+			for _, asset := range []string{"waldo-linux-amd64", "waldo-linux-arm64", "waldo-darwin-" + arch} {
+				want, _ := os.ReadFile(filepath.Join(f.assets, asset))
+				got, e := os.ReadFile(filepath.Join(f.bin, asset))
+				if e != nil || string(got) != string(want) {
+					t.Fatal("missing companion", asset, e)
+				}
+			}
+			native, _ := os.ReadFile(filepath.Join(f.assets, "waldo-darwin-"+arch))
+			got, _ := os.ReadFile(filepath.Join(f.bin, "waldo"))
+			if string(native) != string(got) {
+				t.Fatal("wrong native executable")
+			}
+			downloads, _ := os.ReadFile(filepath.Join(f.root, "downloads"))
+			other := "amd64"
+			if arch == "amd64" {
+				other = "arm64"
+			}
+			if strings.Contains(string(downloads), "waldo-darwin-"+other) {
+				t.Fatal("downloaded unnecessary Mac architecture")
+			}
+		})
 	}
 }

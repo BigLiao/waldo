@@ -9,7 +9,7 @@ mcp_config_flag = "--mcp-config"
 skill_dir = "~/.claude/skills"
 env    = { USE_BUILTIN_RIPGREP = "0", DISABLE_AUTOUPDATER = "1" }
 shared = ["~/.claude/shell-snapshots"]
-scrub  = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"]
+scrub  = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL"]
 needs  = ["rg", "git", "bash"]
 state  = ["~/.claude", "~/.claude.json"]
 
@@ -17,6 +17,6 @@ state  = ["~/.claude", "~/.claude.json"]
 telemetry = "codex"
 bin    = "codex"
 args   = ["--sandbox", "danger-full-access"]
-scrub  = ["OPENAI_API_KEY", "CODEX_API_KEY"]
+scrub  = ["OPENAI_API_KEY", "CODEX_API_KEY", "OPENAI_BASE_URL"]
 needs  = ["git", "bash"]
 state  = ["~/.codex"]

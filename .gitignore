@@ -1,3 +1,6 @@
 /waldo
 /dist/
 *.test
+
+/waldo-linux-amd64
+/waldo-linux-arm64

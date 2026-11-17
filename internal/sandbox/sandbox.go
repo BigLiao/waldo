@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -27,7 +28,11 @@ type Spec struct {
 	ExposeRO       []string        // extra read-only paths (toolchains, user config)
 	Exe            string          // waldo binary on the host
 	Env            []string        // initial environment of sandbox-serve
-	ContextDir     string          // private host directory containing the session guide
+	TempDir        string
+	ProxyPort      int
+	HostPorts      []int
+	ListenPorts    []int
+	ContextDir     string // private host directory containing the session guide
 }
 
 type ReadOnlyMount struct{ Source, Target string }
@@ -38,7 +43,12 @@ type Backend interface {
 }
 
 // Default returns the backend for this platform.
-func Default() Backend { return Bwrap{} }
+func Default() Backend {
+	if runtime.GOOS == "darwin" {
+		return Seatbelt{}
+	}
+	return Bwrap{}
+}
 
 // Toolchains lists home-relative directories that are mounted read-only when
 // they exist. Directories that tools want to write to (module caches,

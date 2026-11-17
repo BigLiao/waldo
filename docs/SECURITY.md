@@ -21,7 +21,7 @@
 | 终端 | Agent 输出：丢弃 OSC 52（剪贴板）、未列入白名单的 OSC、DCS/APC/PM/SOS、回显标题的 CSI 20t/21t；ssh 转发的 B 端 stderr 同样过滤；握手错误、doctor 报告等结构化字段去掉全部转义序列和控制字符 |
 | SSH | `-T -e none`、`ForwardAgent=no`、`ForwardX11=no`、`ClearAllForwardings=yes`、`PermitLocalCommand=no`、`Tunnel=no` |
 
-路径约束不靠代码：SFTP 服务端和命令执行都在沙箱里，看不到的东西就是不存在。
+路径约束不靠代码：SFTP 服务端和命令执行都在内核沙箱里。Linux 通过挂载限制可见范围，macOS 通过 Seatbelt 拒绝未经授权的读取与写入。
 
 文件缓存只使用原 SFTP 流中的只读版本校验扩展，不使用目录监听、通知订阅或后台推送。A 的沙箱实际打开文件并返回该句柄的纳秒修改时间、大小及文件身份；缓存命中也必须重新打开并校验，因此不跳过 A 的打开权限检查。写入和其他文件操作继续由原 SFTP 服务处理，不扩大宿主机访问范围。按时间戳判断属于弱一致性，不构成内容完整性证明；同时间戳、大小和身份的改写可能漏检，打开后的缓存快照也不保证实时反映并发修改。
 
@@ -52,6 +52,16 @@ Claude 的 B 侧工具计时同样由 `--observe` 开启，通过临时内联 se
 - 项目目录读写；已存在的 `.git/hooks`、`.git/config`、`.git/info`、`.envrc`、`.vscode/`、`.idea/`、`.devcontainer/` 只读；`.git` 绑定到自身，不能被改名替换。
 - 策略文件（`~/.config/waldo/`）和审计日志（`~/.local/share/waldo/audit.log`）在沙箱内不可见。
 
+## A 沙箱 macOS Seatbelt
+
+Mac 使用默认拒绝策略，允许项目、私有 HOME/TMPDIR 读写，系统工具链只读。受保护路径同时拒绝写入、创建与替换；测试覆盖 `.git` 大小写别名和 Unicode 等价路径。不存在 PID、网络或挂载命名空间，不承诺 Linux 的进程和目录不可见性。
+
+Mac 出网代理只在回环随机端口监听，HTTP 与 CONNECT 均要求会话认证，转发前移除认证头；连接关闭时撤销代理并清理既有连接。凭据不进入发送给 B 的 Facts。未经配置的外网、回环目标及 DNS IPC 不放行；共享端口的隔离差异见 [macOS 使用说明](macos.md)。
+
+B 的登录 shell 凭证、模型和服务配置只加载到 B Agent；profile 的 scrub 清单继续确保它们不进入 A 的转发命令环境。B 程序版本并存不改变 Agent 状态共享范围。
+
+原生进程组收到 TERM，2 秒后仍未退出则 KILL，可信 A 等待最多 5 秒；脱离进程组的 daemon 不保证全部清除。它继承 Seatbelt 权限，但仍可能继续改写已授权项目或使用已允许端口。这里只保证受管命令的生命周期，不能把退出解释为撤销全部文件权限。
+
 ## 回归测试
 
 `test/attack` 里每一项都必须失败：读 `~/.ssh`、读项目外文件、读/改 waldo 配置和 allow 列表、读审计日志、写 `.git/hooks`、`git config core.fsmonitor`、替换 `.git`、写系统目录、连接未声明的宿主机端口、经代理访问未放行域名、经代理访问宿主机 IP、白名单域名解析到回环、绕过代理直连、直接 DNS、抽象 unix socket、看到宿主机进程、看到宿主机网卡。另有正向对照（写项目文件、git、声明过的宿主机端口、白名单域名）确保失败来自策略而不是测试本身坏了。
@@ -60,6 +70,6 @@ Claude 的 B 侧工具计时同样由 `--observe` 开启，通过临时内联 se
 
 - 共享内核：内核漏洞可导致沙箱逃逸。
 - 默认模式下项目目录可写：Agent 可以改坏工作区，也可以修改 `package.json` scripts、`Makefile` 等你之后会在宿主机上运行的内容——运行前先看 `git diff`。
-- **会话开始时不存在的受保护路径**（如新建 `.envrc`、在非 git 目录里 `git init`、`.git/commondir`）无法预先设为只读；waldo 在会话结束时检测到它们出现/被替换会打印警告并记日志，但不会阻止。
+- **Linux 会话开始时不存在的受保护路径**（如新建 `.envrc`、在非 git 目录里 `git init`、`.git/commondir`）无法预先设为只读；waldo 在会话结束时检测到它们出现/被替换会打印警告并记日志，但不会阻止。
 - 终端仍会显示 B 发来的普通文本，可能具有误导性。
 - B 上的 Agent 登录态属于 B 自身的损失面。

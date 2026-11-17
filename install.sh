@@ -82,15 +82,26 @@ waldo_main() {
         esac
     done
 
-    [ "$(uname -s)" = Linux ] || waldo_fail '目前只支持 Linux'
+    case "$(uname -s)" in
+        Linux) waldo_os=linux ;;
+        Darwin) waldo_os=darwin ;;
+        *) waldo_fail '目前只支持 Linux 和 macOS' ;;
+    esac
     case "$(uname -m)" in
         x86_64|amd64) waldo_arch=amd64 ;;
         aarch64|arm64) waldo_arch=arm64 ;;
-        *) waldo_fail '目前只发布 Linux amd64 和 arm64 产物' ;;
+        *) waldo_fail '目前只发布 amd64 和 arm64 产物' ;;
     esac
-    for waldo_tool in curl sha256sum awk mktemp cp chmod mv mkdir rm; do
+    for waldo_tool in curl awk mktemp cp chmod mv mkdir rm; do
         command -v "$waldo_tool" >/dev/null 2>&1 || waldo_fail "缺少命令: $waldo_tool"
     done
+    if command -v sha256sum >/dev/null 2>&1; then
+        waldo_checksum=sha256sum
+    elif command -v shasum >/dev/null 2>&1; then
+        waldo_checksum=shasum
+    else
+        waldo_fail '缺少 SHA256 校验命令：sha256sum 或 shasum'
+    fi
     if [ -z "$waldo_bin_dir" ]; then
         [ -n "${HOME:-}" ] || waldo_fail '未设置 HOME，请使用 --bin-dir'
         waldo_bin_dir="$HOME/.local/bin"
@@ -127,25 +138,27 @@ waldo_main() {
 
     # Resolve latest once, then pin every asset to this immutable tag.
     waldo_base="https://github.com/BigLiao/waldo/releases/download/$waldo_version"
-    printf '下载 Waldo %s（Linux %s）…\n' "$waldo_version" "$waldo_arch"
+    printf '下载 Waldo %s（%s %s）…\n' "$waldo_version" "$waldo_os" "$waldo_arch"
     waldo_download "$waldo_base/SHA256SUMS" "$waldo_work/release-sums"
-    for waldo_asset in waldo-linux-amd64 waldo-linux-arm64; do
+    waldo_assets='waldo-linux-amd64 waldo-linux-arm64'
+    if [ "$waldo_os" = darwin ]; then waldo_assets="$waldo_assets waldo-darwin-$waldo_arch"; fi
+    for waldo_asset in $waldo_assets; do
         waldo_checksum_entry "$waldo_asset"
         waldo_download "$waldo_base/$waldo_asset" "$waldo_work/$waldo_asset"
     done
-    (cd "$waldo_work" && sha256sum -c SHA256SUMS) || waldo_fail 'SHA256 校验失败，未替换已有安装'
+    (cd "$waldo_work" && if [ "$waldo_checksum" = shasum ]; then shasum -a 256 -c SHA256SUMS; else sha256sum -c SHA256SUMS; fi) || waldo_fail 'SHA256 校验失败，未替换已有安装'
 
     mkdir -p -- "$waldo_bin_dir"
-    for waldo_target in waldo waldo-linux-amd64 waldo-linux-arm64; do
+    for waldo_target in waldo $waldo_assets; do
         [ ! -d "$waldo_bin_dir/$waldo_target" ] || waldo_fail "目标是目录: $waldo_bin_dir/$waldo_target"
     done
     # Stage on the destination filesystem. Renaming the main binary avoids
     # truncating a running executable and leaves shell wrappers' paths stable.
     waldo_stage=$(mktemp -d "$waldo_bin_dir/.waldo-install.XXXXXX")
-    cp "$waldo_work/waldo-linux-amd64" "$waldo_stage/waldo-linux-amd64"
-    cp "$waldo_work/waldo-linux-arm64" "$waldo_stage/waldo-linux-arm64"
-    cp "$waldo_work/waldo-linux-$waldo_arch" "$waldo_stage/waldo"
-    chmod 755 "$waldo_stage/waldo" "$waldo_stage/waldo-linux-amd64" "$waldo_stage/waldo-linux-arm64"
+    for waldo_asset in $waldo_assets; do cp "$waldo_work/$waldo_asset" "$waldo_stage/$waldo_asset"; done
+    cp "$waldo_work/waldo-$waldo_os-$waldo_arch" "$waldo_stage/waldo"
+    chmod 755 "$waldo_stage/waldo"
+    for waldo_asset in $waldo_assets; do chmod 755 "$waldo_stage/$waldo_asset"; done
     # Execute from the destination filesystem: /tmp may be mounted noexec.
     waldo_actual=$(WALDO_CONFIG_DIR="$waldo_work/config" WALDO_DATA_DIR="$waldo_work/data" \
         "$waldo_stage/waldo" version) || waldo_fail '二进制无法在安装目录运行'
@@ -153,8 +166,13 @@ waldo_main() {
         "${waldo_version#v}+"?*) ;;
         *) waldo_fail "二进制版本与 Release 不一致: $waldo_actual" ;;
     esac
-    for waldo_target in waldo-linux-amd64 waldo-linux-arm64 waldo; do
-        mv -fT -- "$waldo_stage/$waldo_target" "$waldo_bin_dir/$waldo_target"
+    for waldo_target in $waldo_assets waldo; do
+        [ ! -d "$waldo_bin_dir/$waldo_target" ] || waldo_fail "目标是目录: $waldo_target"
+        if mv --version >/dev/null 2>&1; then
+            mv -fT -- "$waldo_stage/$waldo_target" "$waldo_bin_dir/$waldo_target"
+        else
+            mv -fh -- "$waldo_stage/$waldo_target" "$waldo_bin_dir/$waldo_target"
+        fi
     done
     printf '已安装 %s → %s/waldo\n' "$waldo_actual" "$waldo_bin_dir"
     case ":${PATH:-}:" in

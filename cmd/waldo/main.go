@@ -8,8 +8,10 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"waldo/internal/cli"
@@ -23,6 +25,10 @@ import (
 func main() {
 	base := filepath.Base(os.Args[0])
 	if !strings.HasPrefix(base, "waldo") {
+		if runtime.GOOS != "linux" {
+			fmt.Fprintln(os.Stderr, "waldo: command stubs require Linux B")
+			os.Exit(2)
+		}
 		os.Exit(stub.Main())
 	}
 	if len(os.Args) > 1 {
@@ -32,6 +38,10 @@ func main() {
 		case "host-bash-mcp":
 			os.Exit(hostbash.Main(os.Args[2:]))
 		case "host":
+			if runtime.GOOS != "linux" {
+				fmt.Fprintln(os.Stderr, "waldo: B requires Linux")
+				os.Exit(2)
+			}
 			os.Exit(host.Main(os.Args[2:]))
 		case "sandbox-serve":
 			os.Exit(serve.Main())
