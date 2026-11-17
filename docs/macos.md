@@ -4,9 +4,21 @@ macOS 作为 A，Agent 继续运行在 Linux B。Mac 使用原生 Seatbelt 执�
 
 当前已在 Apple Silicon、macOS 15.6.1 上运行原生回归，并交叉构建 darwin/amd64。Intel Mac 的原生运行仍需验证。
 
+## 安装
+
+macOS 需要包含 Mac 产物的 Release（v0.4.1 起）；v0.3.1 仅有 Linux 产物。可使用与 Linux 相同的一键安装命令：
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/BigLiao/waldo/master/install.sh | sh
+waldo setup me@linux-server
+waldo claude --exec-mode host-mcp
+```
+
+安装脚本自动下载本机 Mac 程序及两个 Linux B 配套程序，以 `sha256sum` 或系统 `shasum -a 256` 校验后安装到 `~/.local/bin`。若该目录尚未在 PATH 中，按脚本提示添加。
+
 ## 从源码使用
 
-此功能尚未发布到稳定 Release。使用 Go 1.26.8+ 构建配套程序：
+也可使用 Go 1.26.8+ 构建配套程序：
 
 ```sh
 make build-pair BUILD="dev-$(date +%s)"
@@ -16,7 +28,7 @@ make build-pair BUILD="dev-$(date +%s)"
 
 将 `waldo`、`waldo-linux-amd64`、`waldo-linux-arm64` 放在同一目录。配套构建使用相同 Version/Build；仅运行 `make dev` 得到的本机文件哈希与 Linux 程序不同，不能作为跨系统配套版本。
 
-`make release` 生成 Linux/macOS、amd64/arm64 四种程序和校验文件。支持 Mac 的 Release 发布后，一键安装脚本会下载本机 Mac 程序及两个 Linux B 配套程序，使用 `sha256sum` 或系统 `shasum -a 256` 校验。
+`make release` 生成 Linux/macOS、amd64/arm64 四种程序和校验文件。
 
 `setup` 使用已有 Homebrew 安装缺失的 git、bash、ripgrep，不自动安装 Homebrew。Seatbelt 不可用时启动失败，不回退为直接执行。`doctor` 会实际验证沙箱可执行、项目可写、秘密文件不可读及 Git 配置不可改。
 
