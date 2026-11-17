@@ -20,19 +20,19 @@ waldo 让 Claude Code、Codex 等编程 Agent 运行在你自己的服务器上�
 
 - 一台你能用 SSH 登录的 Linux 服务器（`ssh me@my-server` 能直接连上）；
 - 在这台服务器上安装好要使用的 Agent，例如 Claude Code；
-- 你正在用的这台电脑是 Linux，或使用主分支源码构建的 macOS 客户端（见 [macOS 使用说明](docs/macos.md)）。
+- 你正在用的这台电脑是 Linux 或 macOS（见 [macOS 使用说明](docs/macos.md)）。
 
 其余依赖交给 `waldo setup` 自动补齐，过程中可能需要输入 sudo 密码。
 
 ## 安装
 
-一键安装最新稳定 Release（需要 `curl` 和 `sha256sum`，无需 Go 或 sudo）：
+一键安装最新稳定 Release（需要 `curl`，以及 `sha256sum` 或 Mac 自带的 `shasum`，无需 Go 或 sudo）：
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/BigLiao/waldo/master/install.sh | sh
 ```
 
-脚本自动识别 Linux amd64/arm64，固定 Release 版本后下载并校验两个架构的产物，安装到 `~/.local/bin`，同时准备好跨架构服务器需要的文件。下载或校验失败时不会替换已有安装，主程序以原子替换方式更新；不修改配置、登录状态或 shell 配置。若安装目录尚未在 PATH 中，按脚本提示添加。
+脚本自动识别 Linux/macOS amd64/arm64，固定 Release 版本后下载并校验本机程序和两个 Linux 配套产物，安装到 `~/.local/bin`，同时准备好服务器需要的文件。macOS 需使用包含 Mac 产物的 Release（v0.4.1 起），较早版本仅提供 Linux 产物。下载或校验失败时不会替换已有安装，主程序以原子替换方式更新；不修改配置、登录状态或 shell 配置。若安装目录尚未在 PATH 中，按脚本提示添加。
 
 指定版本或安装目录：
 
@@ -42,7 +42,7 @@ curl -fsSL https://raw.githubusercontent.com/BigLiao/waldo/master/install.sh | s
 
 安装后运行 `waldo setup me@my-server` 初始化依赖和服务器。脚本安装的是已发布版本；主分支尚未发布的功能可用下方的源码构建方式体验。
 
-也可从 [GitHub Releases](https://github.com/BigLiao/waldo/releases/latest) 手动下载适合本机架构的 `waldo-linux-amd64` 或 `waldo-linux-arm64`，以及 `SHA256SUMS`，放在同一目录后安装：
+Linux 也可从 [GitHub Releases](https://github.com/BigLiao/waldo/releases/latest) 手动下载适合本机架构的 `waldo-linux-amd64` 或 `waldo-linux-arm64`，以及 `SHA256SUMS`，放在同一目录后安装；Mac 推荐使用上方的一键安装：
 
 ```sh
 sha256sum --ignore-missing --check SHA256SUMS
@@ -61,7 +61,7 @@ cd waldo
 make build
 ```
 
-macOS 连接 Linux B 时，使用 `make build-pair BUILD="dev-$(date +%s)"` 构建匹配的本机程序与两个 Linux 配套程序，并将它们放在同一目录；稳定 Release 尚未包含本次 macOS 支持。
+macOS 从源码构建并连接 Linux B 时，使用 `make build-pair BUILD="dev-$(date +%s)"` 构建匹配的本机程序与两个 Linux 配套程序，并将它们放在同一目录。
 
 得到的 `./waldo` 是一个独立的二进制文件，把它放进 `PATH` 中的任一目录即可，例如：
 
