@@ -420,12 +420,28 @@ func (h *host) runAgent(cmd *exec.Cmd, st io.ReadWriteCloser) int {
 	} else {
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 		in, err1 := cmd.StdinPipe()
-		out, err2 := cmd.StdoutPipe()
-		errp, err3 := cmd.StderrPipe()
+		// Own the read ends: Cmd.Wait closes StdoutPipe/StderrPipe before
+		// our relay necessarily drains them, dropping the child's final output.
+		out, outw, err2 := os.Pipe()
+		errp, errw, err3 := os.Pipe()
+		for _, pipe := range []*os.File{out, outw, errp, errw} {
+			if pipe != nil {
+				defer pipe.Close()
+			}
+		}
+		if in != nil {
+			defer in.Close()
+		}
 		if err := errors.Join(err1, err2, err3); err != nil {
 			return 1
 		}
-		if err := cmd.Start(); err != nil {
+		cmd.Stdout, cmd.Stderr = outw, errw
+		err := cmd.Start()
+		// Only the child keeps the write ends; EOF follows its exit unless a
+		// background descendant inherited them (handled by the drain timeout).
+		outw.Close()
+		errw.Close()
+		if err != nil {
 			fw.Write(proto.FError, []byte(fmt.Sprintf("waldo host: 启动胶囊失败: %v\n", err)))
 			fw.WriteJSON(proto.FExit, proto.Exit{Code: 1})
 			return 1
