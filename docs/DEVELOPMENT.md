@@ -21,7 +21,7 @@ macOS A 的原生沙箱、端口和临时目录差异见 [macOS 使用说明](ma
 
 ## CI 与发布
 
-GitHub Actions 在分支 push 和 pull request 时运行 `make test`（vet、单元测试、攻击回归、端到端测试）。Runner 使用 Ubuntu 24.04，自动安装 bubblewrap、sshd、sshfs 等依赖，并开启测试需要的用户命名空间和 FUSE 访问。
+GitHub Actions 在 master push 和 pull request 时运行 `make test`（vet、单元测试、攻击回归、端到端测试）；功能分支由 PR 检查，避免同一提交因 push 和 PR 重复运行。同一 PR 的新提交会自动取消旧任务，版本发布按独立 tag 分组。Runner 使用 Ubuntu 24.04，自动安装 bubblewrap、sshd、sshfs 等依赖，并开启测试需要的用户命名空间和 FUSE 访问。
 
 提交并推送工作流后，在要发布的提交上创建并推送版本 tag：
 
