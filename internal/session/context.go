@@ -94,6 +94,9 @@ func contextGuide(p *config.Policy, host, agent, cwd string, mounts []string) []
 	}
 	fmt.Fprintf(&b, "\nAllowed destinations at startup: %q.\n", allow)
 	fmt.Fprintf(&b, "Host services available on sandbox localhost: %v.\n", p.HostPorts)
+	if len(p.WindowsPorts) > 0 {
+		fmt.Fprintf(&b, "Windows host services available on sandbox 127.0.0.1: %v.\n", p.WindowsPorts)
+	}
 	fmt.Fprintf(&b, "Forwarded development ports: mode=%q, explicit ports=%v. Auto mode excludes reserved service ports.\n", p.Ports.Mode, p.Ports.List)
 	fmt.Fprintf(&b, "Proxy connections to private/local addresses allowed: %t.\n", p.AllowPrivate)
 	fmt.Fprintln(&b, "\nThe user can update network permissions on A with `waldo allow <domain>`. Ask the user when a task needs a policy change; do not edit policy from inside the sandbox.")

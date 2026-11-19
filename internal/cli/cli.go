@@ -23,6 +23,7 @@ import (
 	"waldo/internal/sandbox"
 	"waldo/internal/session"
 	"waldo/internal/termfilter"
+	"waldo/internal/wsl"
 )
 
 const usage = `waldo — Agent 跑在你的服务器上，它的"手"落在这台机器的沙箱里
@@ -429,6 +430,18 @@ func doctor(cfg *config.Config) int {
 	bad := 0
 	distro := host.Distro()
 	fmt.Println("A（本机）:")
+	if wsl.IsWSL2() {
+		mode := wsl.NetworkMode()
+		fmt.Printf("  %s WSL2 网络模式: %s\n", mark(mode != "none" && mode != "unknown", true), mode)
+		if mode == "none" {
+			fmt.Println("      检查 WSL 启动错误与 Windows 用户目录中的 .wslconfig")
+		}
+		if bridge, err := wsl.NewPortBridge(); err != nil {
+			fmt.Printf("  ! Windows 回环端口桥接不可用: %v\n", err)
+		} else {
+			bridge.Close()
+		}
+	}
 	localBins := []string{"ssh", "bwrap"}
 	if runtime.GOOS == "darwin" {
 		localBins = []string{"ssh", "/usr/bin/sandbox-exec"}

@@ -29,6 +29,7 @@ import (
 	"waldo/internal/termfilter"
 	"waldo/internal/transport"
 	"waldo/internal/util"
+	"waldo/internal/wsl"
 )
 
 // Options for one agent session.
@@ -318,6 +319,31 @@ func reportProtected(snap sandbox.Snapshot, al *audit.Logger) {
 	}
 }
 
+func factsForRemote(facts proto.Facts, mode string, onWSL2 bool) proto.Facts {
+	if !onWSL2 || mode != proto.ExecHost {
+		return facts
+	}
+	// In host mode B mounts stubs at A's original PATH locations. The WSL
+	// driver directory has no mountpoint under B's read-only /usr/lib.
+	const wslRuntime = "/usr/lib/wsl"
+	dirs := make([]proto.PathDir, 0, len(facts.PathDirs))
+	var path []string
+	for _, dir := range facts.PathDirs {
+		if util.Within(filepath.Clean(dir.Dir), wslRuntime) || util.Within(filepath.Clean(dir.Real), wslRuntime) {
+			continue
+		}
+		dirs = append(dirs, dir)
+		if dir.OnPath {
+			path = append(path, dir.Dir)
+		}
+	}
+	if len(dirs) != len(facts.PathDirs) {
+		facts.PathDirs = dirs
+		facts.Env = util.EnvSet(facts.Env, "PATH", strings.Join(path, ":"))
+	}
+	return facts
+}
+
 func runRemote(o Options, host string, sb *Sandbox, id, cwd, project string, mounts []string, al *audit.Logger) int {
 	tr := SSHTransport(o.Config, host)
 	conn, err := tr.OpenResumable()
@@ -370,7 +396,7 @@ func runRemote(o Options, host string, sb *Sandbox, id, cwd, project string, mou
 		Observe:       sb.Observe,
 		Paseo:         o.paseoBroker != nil, ReadOnlyMounts: o.readOnlyMounts,
 		Version: proto.FullVersion(), Session: id, Profile: o.Profile.Wire(), Argv: o.Args,
-		Cwd: cwd, Project: project, Mounts: mounts, Facts: sb.Facts, Interactive: interactive,
+		Cwd: cwd, Project: project, Mounts: mounts, Facts: factsForRemote(sb.Facts, o.ExecMode, wsl.IsWSL2()), Interactive: interactive,
 		TimeUnixMs:              time.Now().UnixMilli(),
 		MetadataCacheTTLSeconds: int64(sb.MetadataCacheTTL / time.Second),
 		ContentCacheTTLSeconds:  int64(sb.ContentCacheTTL / time.Second),

@@ -20,7 +20,7 @@ waldo 让 Claude Code、Codex 等编程 Agent 运行在你自己的服务器上�
 
 - 一台你能用 SSH 登录的 Linux 服务器（`ssh me@my-server` 能直接连上）；
 - 在这台服务器上安装好要使用的 Agent，例如 Claude Code；
-- 你正在用的这台电脑是 Linux 或 macOS（见 [macOS 使用说明](docs/macos.md)）。
+- 你正在用的这台电脑是 Linux、macOS 或运行 Ubuntu 等 WSL2 发行版的 Windows。[macOS 使用说明](docs/macos.md) · [Windows 与 WSL2 使用说明](docs/configuration.md#windows-与-wsl2)
 
 其余依赖交给 `waldo setup` 自动补齐，过程中可能需要输入 sudo 密码。
 
@@ -41,6 +41,8 @@ curl -fsSL https://raw.githubusercontent.com/BigLiao/waldo/master/install.sh | s
 ```
 
 安装后运行 `waldo setup me@my-server` 初始化依赖和服务器。脚本安装的是已发布版本；主分支尚未发布的功能可用下方的源码构建方式体验。
+
+Windows 用户在 WSL2 发行版的终端里安装和运行 Waldo，项目放在 WSL 的 Linux 文件系统。Windows 工具可以打开同一份项目，并通过按项目配置的 `windows_ports` 提供本机调试服务。[安装、工作区与调试配置](docs/configuration.md#windows-与-wsl2)
 
 Linux 也可从 [GitHub Releases](https://github.com/BigLiao/waldo/releases/latest) 手动下载适合本机架构的 `waldo-linux-amd64` 或 `waldo-linux-arm64`，以及 `SHA256SUMS`，放在同一目录后安装；Mac 推荐使用上方的一键安装：
 
@@ -231,6 +233,7 @@ waldo allow api.example.com
 
 ## 更多文档
 
+- [Windows 与 WSL2 使用说明](docs/configuration.md#windows-与-wsl2)
 - [配置参考](docs/configuration.md)：全部配置项与初始化细节
 - [安全说明](docs/SECURITY.md)：信任边界与沙箱策略
 - [Agent profile](docs/profiles.md)：接入新的 Agent

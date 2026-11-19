@@ -168,6 +168,50 @@ Paseo 为每台机器配置独立 provider（合入 `~/.paseo/config.json`，替
 
 账号和额度分别由各台 B 的 Claude 管理，不自动切机重放任务。多个 Agent 同时修改同一项目时建议使用独立 worktree。
 
+## Windows 与 WSL2
+
+### 安装和启动
+
+在 Windows PowerShell 中用 `wsl -l -v` 确认发行版的 VERSION 为 `2`，再用 `wsl -d Ubuntu` 进入发行版。安装和运行命令在 Ubuntu 的终端里执行。Waldo 复用 WSL 的 Linux 工具链和 bubblewrap，Agent 继续运行在你的 Linux B 上。[Microsoft WSL 安装说明](https://learn.microsoft.com/zh-cn/windows/wsl/install)
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/BigLiao/waldo/master/install.sh | sh
+export PATH="$HOME/.local/bin:$PATH"
+waldo setup me@my-linux-server
+waldo doctor
+```
+
+安装脚本下载已发布的版本。使用尚未发布的功能时，在 WSL 中从源码运行 `make build-pair`，再把 `waldo` 和两个 Linux 配套二进制一起安装到 `~/.local/bin`。[源码构建](DEVELOPMENT.md#构建)
+
+### 放置和打开项目
+
+把项目克隆或迁入 WSL 的 Linux 文件系统，例如 `~/projects/miniapp`。Waldo 会拒绝在 Windows 挂载盘（如 `/mnt/c`）中的项目启动沙箱，因为这类文件系统上的等价路径可能使受保护文件的只读约束失效。Windows 资源管理器和支持 WSL 共享路径的工具可以通过 `\\wsl.localhost\Ubuntu\home\me\projects\miniapp` 打开同一个项目。也可以在 WSL 项目目录里执行 `explorer.exe .`。[Microsoft 文件系统说明](https://learn.microsoft.com/en-us/windows/wsl/filesystems)
+
+```sh
+cd ~/projects/miniapp
+waldo claude --exec-mode host-mcp
+```
+
+`waldo doctor` 会显示 WSL 实际运行的网络模式。若显示 `none`，先检查 Windows 上的 WSL 启动错误与 `%UserProfile%\.wslconfig`。在可联网的 NAT 或 mirrored 模式下即可连接 B。[WSL 网络说明](https://learn.microsoft.com/en-us/windows/wsl/networking)
+
+### 访问 Windows 调试服务
+
+若 Windows 工具在 `127.0.0.1` 上提供调试服务，添加项目级 `net.windows_ports`。以下以微信开发者工具的自动化端口为例，把端口号换成实际使用的值。
+
+```toml
+[project."~/projects/miniapp"]
+execution.mode = "host-mcp"
+net.windows_ports = [9420]
+```
+
+从该项目启动会话后，执行位置为 A 的工具可连接沙箱内的 `127.0.0.1:9420`。Waldo 通过 WSL 的 Windows 进程互操作在 Windows 侧连接相同的 IPv4 回环端口，因此 NAT 与 mirrored 均可使用。需要标准 WSL2 内核、已启用的 WSL 互操作和 Windows 系统目录中的 PowerShell。已启用 mirrored 且 WSL 外层可以直接访问该 Windows 回环服务时，也可以使用现有 `host_ports`。同一个端口只能配置在其中一项，`39339` 为 Waldo 沙箱的出网代理保留。[WSL 网络说明](https://learn.microsoft.com/en-us/windows/wsl/networking)
+
+只向需要的项目授权目标端口。获准连接的工具可以调用该监听端口提供的接口，例如小程序模拟器的页面操作和截图。[微信小程序自动化文档](https://developers.weixin.qq.com/miniprogram/dev/devtools/auto/automator.html)
+
+每个会话最多同时桥接 8 个 Windows 连接。本地客户端结束发送后，桥接会继续转发 Windows 的响应。连续 5 秒无法接收或转发响应数据时，桥接会关闭连接并释放名额。
+
+若 `waldo doctor` 提示 WSL 互操作不可用，确认发行版启用了互操作，并在停止正在运行的 WSL 工作后从 Windows 执行 `wsl --shutdown`，再启动发行版。有 systemd 的部分 WSL 版本可能在发行版停止后丢失互操作注册。[Microsoft WSL 问题记录](https://github.com/microsoft/WSL/issues/40537)
+
 ## 命令执行模式
 
 `host-mcp` 禁用 Claude 内置 Bash、Read、Grep、Glob、Edit、Write、NotebookEdit，提供同名 MCP 工具（如 `mcp__waldo__Read`），参数沿用原工具，额外增加 `location = auto | host | agent`。使用 `waldo claude --paseo --exec-mode host-mcp` 或 `[execution] mode = "host-mcp"` 开启，未设置 `MCP_TIMEOUT` 时，MCP 启动等待上限为 180 秒，以容纳投影文件造成的启动阻塞。项目挂载仍用于说明和 skills 加载；B 保留原生 shell，仅启动时 PATH 中的 Git 探测转发 A。

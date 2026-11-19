@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -71,6 +72,7 @@ type NetCfg struct {
 	Allow        []string `toml:"allow"`
 	Ports        any      `toml:"ports"` // "auto" | "off" | [3000, 5173]
 	HostPorts    []int    `toml:"host_ports"`
+	WindowsPorts []int    `toml:"windows_ports"`
 	AllowPrivate *bool    `toml:"allow_private"`
 }
 
@@ -142,6 +144,7 @@ type Policy struct {
 	Allow            []string // static allow list (defaults + config)
 	Ports            PortsMode
 	HostPorts        []int
+	WindowsPorts     []int
 	AllowPrivate     bool
 	ExposeRO         []string
 	PassEnv          []string
@@ -246,6 +249,7 @@ func (c *Config) PolicyFor(project string) (*Policy, error) {
 		p.Ports = pm
 	}
 	p.HostPorts = append(p.HostPorts, c.Net.HostPorts...)
+	p.WindowsPorts = append(p.WindowsPorts, c.Net.WindowsPorts...)
 	if c.Net.AllowPrivate != nil {
 		p.AllowPrivate = *c.Net.AllowPrivate
 	}
@@ -265,6 +269,9 @@ func (c *Config) PolicyFor(project string) (*Policy, error) {
 		}
 		if pc.Net.HostPorts != nil {
 			p.HostPorts = pc.Net.HostPorts
+		}
+		if pc.Net.WindowsPorts != nil {
+			p.WindowsPorts = pc.Net.WindowsPorts
 		}
 		if pc.Net.AllowPrivate != nil {
 			p.AllowPrivate = *pc.Net.AllowPrivate
@@ -292,6 +299,14 @@ func (c *Config) PolicyFor(project string) (*Policy, error) {
 				return nil, err
 			}
 			p.MetadataCacheTTL = ttl
+		}
+	}
+	for i, port := range p.WindowsPorts {
+		if port < 1 || port > 65535 {
+			return nil, fmt.Errorf("net.windows_ports: invalid TCP port %d", port)
+		}
+		if slices.Contains(p.HostPorts, port) || slices.Contains(p.WindowsPorts[:i], port) {
+			return nil, fmt.Errorf("net.windows_ports: TCP port %d is already configured", port)
 		}
 	}
 	// Older configurations used metadata_cache_ttl=0s to bypass all project

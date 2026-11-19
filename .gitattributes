@@ -1,0 +1,4 @@
+# Store and check out text files with LF on every platform (including
+# Windows checkouts used from WSL), regardless of core.autocrlf.
+* text=auto eol=lf
+*.sh text eol=lf

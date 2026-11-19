@@ -3,6 +3,7 @@ package session
 import (
 	"net"
 	"os"
+	"reflect"
 	"testing"
 	"time"
 
@@ -10,6 +11,33 @@ import (
 	"waldo/internal/proto"
 	"waldo/internal/util"
 )
+
+func TestHostModeOmitsWSLRuntimeStubPaths(t *testing.T) {
+	facts := proto.Facts{
+		Env: []string{"HOME=/home/me", "PATH=/bin:/usr/lib/wsl/lib:/home/me/drivers:/usr/local/bin"},
+		PathDirs: []proto.PathDir{
+			{Dir: "/bin", Real: "/usr/bin", OnPath: true},
+			{Dir: "/usr/lib/wsl/lib", Real: "/usr/lib/wsl/lib", OnPath: true},
+			{Dir: "/home/me/drivers", Real: "/usr/lib/wsl/lib", OnPath: true},
+			{Dir: "/usr/local/bin", Real: "/usr/local/bin", OnPath: true},
+			{Dir: "/sbin", Real: "/usr/sbin"},
+		},
+	}
+	got := factsForRemote(facts, proto.ExecHost, true)
+	wantDirs := []proto.PathDir{facts.PathDirs[0], facts.PathDirs[3], facts.PathDirs[4]}
+	if path, _ := util.EnvGet(got.Env, "PATH"); path != "/bin:/usr/local/bin" ||
+		!reflect.DeepEqual(got.PathDirs, wantDirs) {
+		t.Fatalf("host facts: %+v", got)
+	}
+	if path, _ := util.EnvGet(facts.Env, "PATH"); path != "/bin:/usr/lib/wsl/lib:/home/me/drivers:/usr/local/bin" ||
+		facts.PathDirs[1].Dir != "/usr/lib/wsl/lib" {
+		t.Fatalf("mutated the A sandbox facts: %+v", facts)
+	}
+	if !reflect.DeepEqual(factsForRemote(facts, proto.ExecHostMCP, true), facts) ||
+		!reflect.DeepEqual(factsForRemote(facts, proto.ExecHost, false), facts) {
+		t.Fatal("native PATH handling changed in another mode or platform")
+	}
+}
 
 // B cannot ask A to make an arbitrary outbound connection or dial a local
 // port. Optional streams also stay closed unless enabled for the session.

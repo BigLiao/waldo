@@ -14,6 +14,7 @@ import (
 
 	"waldo/internal/proto"
 	"waldo/internal/util"
+	"waldo/internal/wsl"
 )
 
 // InnerExe is where the waldo binary appears inside the sandbox.
@@ -93,6 +94,9 @@ func Protected(project string) []string {
 type Bwrap struct{}
 
 func (Bwrap) Command(s Spec) (*exec.Cmd, error) {
+	if err := wsl.CheckProject(s.Project); err != nil {
+		return nil, err
+	}
 	bw, err := exec.LookPath("bwrap")
 	if err != nil {
 		return nil, fmt.Errorf("找不到 bwrap（bubblewrap），请先安装：%w", err)

@@ -1,9 +1,40 @@
 package netpolicy
 
 import (
+	"errors"
+	"io"
+	"net"
 	"net/netip"
 	"testing"
+	"time"
+
+	"waldo/internal/config"
+	"waldo/internal/proto"
 )
+
+func TestWindowsPortRequiresExplicitAuthorization(t *testing.T) {
+	p := New(&config.Policy{WindowsPorts: []int{9420}}, nil)
+	p.WindowsDial = func(port int) (io.ReadWriteCloser, error) {
+		if port != 9420 {
+			t.Errorf("unexpected dial to Windows port %d", port)
+		}
+		return nil, errors.New("sentinel Windows dial")
+	}
+	for _, tc := range []struct {
+		port int
+		want string
+	}{{9420, "sentinel Windows dial"}, {9421, "port not allowed"}} {
+		client, server := net.Pipe()
+		client.SetDeadline(time.Now().Add(time.Second))
+		go p.HandleHostPort(server, tc.port)
+		var got proto.Reply
+		err := proto.ReadMsg(client, &got)
+		client.Close()
+		if err != nil || got.OK || got.Msg != tc.want {
+			t.Errorf("port %d: reply %+v, error %v", tc.port, got, err)
+		}
+	}
+}
 
 func TestMatch(t *testing.T) {
 	cases := []struct {

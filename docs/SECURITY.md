@@ -52,6 +52,10 @@ Claude 的 B 侧工具计时同样由 `--observe` 开启，通过临时内联 se
 - 项目目录读写；已存在的 `.git/hooks`、`.git/config`、`.git/info`、`.envrc`、`.vscode/`、`.idea/`、`.devcontainer/` 只读；`.git` 绑定到自身，不能被改名替换。
 - 策略文件（`~/.config/waldo/`）和审计日志（`~/.local/share/waldo/audit.log`）在沙箱内不可见。
 
+WSL2 项目应放在 Linux 文件系统中。Waldo 拒绝把 Windows 挂载盘上的项目或项目内的 Windows 子挂载交给可写沙箱，因为不同路径可能访问同一个文件并使只读保护失效。[Windows 与 WSL2 使用说明](configuration.md#windows-与-wsl2)
+
+在 WSL2 中，`net.windows_ports` 显式授权沙箱访问 Windows 上指定的 IPv4 回环 TCP 端口。可信 A 启动使用固定脚本的 Windows PowerShell 桥接，流内容作为 TCP 数据处理。连接会记录 `windows-port` 审计事件。获准的端口可能提供调试、修改或执行能力，应按项目只授权所需端口。
+
 ## A 沙箱 macOS Seatbelt
 
 Mac 使用默认拒绝策略，允许项目、私有 HOME/TMPDIR 读写，系统工具链只读。受保护路径同时拒绝写入、创建与替换；测试覆盖 `.git` 大小写别名和 Unicode 等价路径。不存在 PID、网络或挂载命名空间，不承诺 Linux 的进程和目录不可见性。

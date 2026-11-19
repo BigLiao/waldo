@@ -12,6 +12,7 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -24,6 +25,7 @@ import (
 	"waldo/internal/proto"
 	"waldo/internal/sandbox"
 	"waldo/internal/util"
+	"waldo/internal/wsl"
 )
 
 // ProxyPort is the outbound proxy port inside the sandbox network namespace.
@@ -131,6 +133,25 @@ func newID() string {
 // StartSandbox launches `waldo sandbox-serve` inside the sandbox and waits
 // for its facts.
 func StartSandbox(o SandboxOptions) (*Sandbox, error) {
+	policy := netpolicy.New(o.Policy, o.Audit)
+	keepContext := false
+	var bridge *wsl.PortBridge
+	if len(o.Policy.WindowsPorts) > 0 {
+		if slices.Contains(o.Policy.WindowsPorts, ProxyPort) {
+			return nil, fmt.Errorf("net.windows_ports: TCP %d 由 Waldo 出网代理保留", ProxyPort)
+		}
+		var err error
+		bridge, err = wsl.NewPortBridge()
+		if err != nil {
+			return nil, err
+		}
+		policy.WindowsDial = bridge.Dial
+		defer func() {
+			if !keepContext {
+				bridge.Close()
+			}
+		}()
+	}
 	exe, err := os.Executable()
 	if err != nil {
 		return nil, err
@@ -149,7 +170,6 @@ func StartSandbox(o SandboxOptions) (*Sandbox, error) {
 		ReadOnlyMounts: o.ReadOnlyMounts,
 	}
 	cleanupContext := func() {}
-	keepContext := false
 	defer func() {
 		if !keepContext {
 			cleanupContext()
@@ -166,7 +186,6 @@ func StartSandbox(o SandboxOptions) (*Sandbox, error) {
 		}
 		spec.ContextDir = dir
 	}
-	policy := netpolicy.New(o.Policy, o.Audit)
 	var native *nativeRuntime
 	if runtime.GOOS == "darwin" {
 		native, err = prepareNative(&o, &spec, &base, policy)
@@ -227,6 +246,9 @@ func StartSandbox(o SandboxOptions) (*Sandbox, error) {
 	sb := &Sandbox{Project: o.Project, Audit: o.Audit, MetadataCacheTTL: o.Policy.MetadataCacheTTL, ContentCacheTTL: o.Policy.ContentCacheTTL, sess: sess, native: native}
 	sb.stop = sync.OnceFunc(func() {
 		sess.Close()
+		if bridge != nil {
+			bridge.Close()
+		}
 		stop()
 		if native != nil {
 			native.Close()
@@ -249,7 +271,7 @@ func StartSandbox(o SandboxOptions) (*Sandbox, error) {
 		sb.Close()
 		return nil, err
 	}
-	cfg := proto.SandboxConfig{BaseEnv: base, ExecEnv: ProxyEnv(), ProxyPort: ProxyPort, HostPorts: o.Policy.HostPorts, Mkdirs: o.Mkdirs}
+	cfg := proto.SandboxConfig{BaseEnv: base, ExecEnv: ProxyEnv(), ProxyPort: ProxyPort, HostPorts: slices.Concat(o.Policy.HostPorts, o.Policy.WindowsPorts), Mkdirs: o.Mkdirs}
 	if native != nil {
 		cfg.Native = true
 		cfg.ProxyPort = 0

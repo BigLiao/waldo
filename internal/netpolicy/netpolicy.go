@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -32,8 +33,9 @@ type Policy struct {
 	dyn      []string
 
 	// Resolver and Dial are overridable for tests.
-	Resolve func(ctx context.Context, host string) ([]netip.Addr, error)
-	Dial    func(ctx context.Context, addr string) (net.Conn, error)
+	Resolve     func(ctx context.Context, host string) ([]netip.Addr, error)
+	Dial        func(ctx context.Context, addr string) (net.Conn, error)
+	WindowsDial func(port int) (io.ReadWriteCloser, error)
 }
 
 func New(p *config.Policy, a *audit.Logger) *Policy {
@@ -181,29 +183,32 @@ func (p *Policy) HandleConnect(st io.ReadWriteCloser, host string, port int) {
 }
 
 // HandleHostPort serves a KindHostPort stream: the sandbox wants a service
-// that runs on the host (only ports listed in host_ports).
+// that runs on a host loopback (only ports listed in host_ports or windows_ports).
 func (p *Policy) HandleHostPort(st io.ReadWriteCloser, port int) {
-	ok := false
-	for _, hp := range p.P.HostPorts {
-		if hp == port {
-			ok = true
-		}
-	}
-	if !ok {
+	defer st.Close()
+	var c io.ReadWriteCloser
+	var err error
+	event := "hostport"
+	switch {
+	case p.WindowsDial != nil && slices.Contains(p.P.WindowsPorts, port):
+		event = "windows-port"
+		c, err = p.WindowsDial(port)
+	case slices.Contains(p.P.HostPorts, port):
+		c, err = net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 5*time.Second)
+	default:
 		proto.WriteMsg(st, proto.Reply{OK: false, Msg: "port not allowed"})
-		st.Close()
 		return
 	}
-	c, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 5*time.Second)
 	if err != nil {
+		if event == "windows-port" {
+			p.Audit.Log(event, map[string]any{"port": port, "error": err.Error()})
+		}
 		proto.WriteMsg(st, proto.Reply{OK: false, Msg: err.Error()})
-		st.Close()
 		return
 	}
-	p.Audit.Log("hostport", map[string]any{"port": port})
+	p.Audit.Log(event, map[string]any{"port": port})
 	if proto.WriteMsg(st, proto.Reply{OK: true}) != nil {
 		c.Close()
-		st.Close()
 		return
 	}
 	util.Splice(st, c)
