@@ -201,6 +201,9 @@ func Run(o Options) int {
 	if o.ExecMode != "" {
 		pol.ExecMode = o.ExecMode
 	}
+	if pol.ExecMode == "" {
+		pol.ExecMode = config.DefaultExecMode(o.Profile.MCPConfigFlag == "--mcp-config")
+	}
 	if err := config.ValidateExecMode(pol.ExecMode); err != nil {
 		warnf("%v", err)
 		return 2

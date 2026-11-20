@@ -43,7 +43,7 @@ state  = ["~/.codex"]
 
 - ELF 二进制：解析符号链接后只读绑定到 `/run/waldo/agent/<名字>` 再执行。
 - `#!` 脚本（例如 npm 安装的 node 脚本）：解释器从 **B** 上解析（`/usr/bin/env node` → B 的 node），绑定到 `/run/waldo/agent/interp-<名字>`；脚本所在的 `node_modules` 树按原路径只读绑定。否则解释器会是 stub，Agent 本身就会被转发到 A 去执行。
-- 默认 `host` 模式下，胶囊里 A 的 PATH 上每个目录都是 stub 目录，所以 PATH 子进程（包括写死的 `/bin/bash`）在 A 上运行。Agent 包内部自带的原生二进制仍可在 B 上运行。`remote` 模式改为绑定 B 的标准工具目录；只有显式调用 `mcp__waldo__Bash` 才将命令转发 A，详见[命令执行模式](configuration.md#命令执行模式)。
+- `host` 模式（Codex 和空 profile 的默认模式；Claude 默认 `host-mcp`）下，胶囊里 A 的 PATH 上每个目录都是 stub 目录，所以 PATH 子进程（包括写死的 `/bin/bash`）在 A 上运行。Agent 包内部自带的原生二进制仍可在 B 上运行。`remote` 模式改为绑定 B 的标准工具目录；只有显式调用 `mcp__waldo__Bash` 才将命令转发 A，详见[命令执行模式](configuration.md#命令执行模式)。
 
 ## 实测记录
 

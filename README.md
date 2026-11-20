@@ -92,7 +92,7 @@ waldo setup me@my-server
 
 ```sh
 cd ~/work/shop
-waldo claude                        # 交互式使用，沿用原有默认模式
+waldo claude                        # 交互式使用，默认 host-mcp 模式
 waldo claude -p "跑一下测试" | tee out.txt   # 非交互模式，管道、退出码照常
 waldo codex                         # 同样支持 Codex
 waldo run -- aider                  # 其他任意命令行 Agent
@@ -108,28 +108,28 @@ waldo link claude
 
 ## Claude 宿主机工具模式：host-mcp
 
-**项目搜索、文件读写和命令执行较多时，推荐使用 `host-mcp`，能显著减少跨机文件访问带来的等待。** 搜索和脚本直接在本机沙箱中处理文件，再把需要的内容和执行结果返回给远端 Agent；大量文件访问时通常会更快，具体提升取决于网络延迟和任务。
+**`host-mcp` 是 Claude 的默认模式，能显著减少跨机文件访问带来的等待。** 搜索和脚本直接在本机沙箱中处理文件，再把需要的内容和执行结果返回给远端 Agent；大量文件访问时通常会更快，具体提升取决于网络延迟和任务。
+
+无需额外参数，`waldo claude` 即使用 `host-mcp`。如需回到原有投影模式，可在启动时指定或在本机 `~/.config/waldo/config.toml` 中设置：
 
 ```sh
-waldo claude --exec-mode host-mcp
+waldo claude --exec-mode host
 ```
-
-也可在本机 `~/.config/waldo/config.toml` 中默认开启：
 
 ```toml
 [execution]
-mode = "host-mcp"
+mode = "host"
 ```
 
 Waldo 会禁用 Claude 内置的 Bash、Read、Grep、Glob、Edit、Write、NotebookEdit，并注入同名 MCP 工具。文件工具按路径分发：项目走本机，Claude memory、会话记录和 `/tmp` 默认走远端；Bash 默认在本机沙箱执行。工具支持用 `location=auto/host/agent` 指定位置。项目仍保留按需投影，供项目说明和 skills 加载使用。
 
 | 模式 | 工具如何执行 |
 |---|---|
-| `host`（默认） | 沿用内置文件工具，通过投影访问项目；PATH 命令转发到本机沙箱 |
-| `host-mcp` | 使用同名 MCP 工具，项目读写、搜索和命令在本机完成，减少跨机文件往返 |
+| `host` | 沿用内置文件工具，通过投影访问项目；PATH 命令转发到本机沙箱 |
+| `host-mcp`（Claude 默认） | 使用同名 MCP 工具，项目读写、搜索和命令在本机完成，减少跨机文件往返 |
 | `remote` | 内置 Bash 在远端运行，需要本机环境时调用注入的 Bash MCP |
 
-`host-mcp` 和 `remote` 当前适用于内置 Claude。若全局启用了这两种模式，使用 Codex 时加 `--exec-mode host`；也可仅在 Claude 启动命令中指定模式。详细工具参数见[命令执行模式](docs/configuration.md#命令执行模式)。
+`host-mcp` 和 `remote` 当前适用于内置 Claude。未配置模式时，Codex 和 `waldo run` 等不支持 `--mcp-config` 的 Agent 自动使用 `host`；若在配置中显式启用这两种模式，使用 Codex 时需加 `--exec-mode host`。详细工具参数见[命令执行模式](docs/configuration.md#命令执行模式)。
 
 ## 在 Paseo 聊天界面中使用
 
@@ -172,7 +172,7 @@ host = "ubuntu@server-2"
 ```sh
 waldo setup --remote b1
 waldo setup --remote b2
-waldo claude --remote b2 --exec-mode host-mcp
+waldo claude --remote b2
 waldo remote ls                    # 配置列表、默认远端与活跃会话数
 waldo remote status --all          # 限时检查连接和远端环境，不安装或启动 Agent
 waldo sessions --remote b2         # 会话、SSH 状态、PID 和项目
@@ -195,7 +195,7 @@ waldo sessions --remote b2         # 会话、SSH 状态、PID 和项目
 | `waldo ports [--remote b2]` | 查看转发端口，支持 `--json` |
 | `waldo log [--remote b2] [-f]` | 查看或跟踪操作日志，可按远端筛选 |
 | `waldo <agent> --observe` | 追加模型调用统计（Claude / Codex）；Claude 同时在 B 侧记录工具 hook 耗时 |
-| `waldo claude --exec-mode host-mcp` | 项目工具通过 MCP 在本机执行，减少跨机文件访问 |
+| `waldo claude --exec-mode host` | 改用内置文件工具通过投影访问项目（默认为 host-mcp） |
 | `waldo claude --exec-mode remote` | 内置 Bash 在远端执行，需要本机环境时调用 Bash MCP |
 | `waldo link <agent>` | 让 `claude` 等命令直接走 waldo |
 | `waldo help [命令 [子命令]]` | 分级帮助，例如 `waldo help remote status`；配置写错时也可查看 |

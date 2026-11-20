@@ -326,16 +326,26 @@ func (c *Config) PolicyFor(project string) (*Policy, error) {
 		}
 	}
 	p.InstructionFiles = names
-	if p.ExecMode == "" {
-		p.ExecMode = proto.ExecHost
-	}
-	if err := ValidateExecMode(p.ExecMode); err != nil {
-		return nil, err
+	// An unset mode stays empty: the session picks host-mcp for agents that
+	// support --mcp-config and host for the rest (see DefaultExecMode).
+	if p.ExecMode != "" {
+		if err := ValidateExecMode(p.ExecMode); err != nil {
+			return nil, err
+		}
 	}
 	for i, e := range p.ExposeRO {
 		p.ExposeRO[i] = filepath.Clean(util.ExpandHome(e, home))
 	}
 	return p, nil
+}
+
+// DefaultExecMode is the mode used when neither the CLI nor the config sets
+// one: host-mcp for agents that accept --mcp-config, host otherwise.
+func DefaultExecMode(mcpCapable bool) string {
+	if mcpCapable {
+		return proto.ExecHostMCP
+	}
+	return proto.ExecHost
 }
 
 func ValidateExecMode(mode string) error {

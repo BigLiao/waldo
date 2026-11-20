@@ -11,7 +11,7 @@ macOS 需要包含 Mac 产物的 Release（v0.4.1 起）；v0.3.1 仅有 Linux �
 ```sh
 curl -fsSL https://raw.githubusercontent.com/BigLiao/waldo/master/install.sh | sh
 waldo setup me@linux-server
-waldo claude --exec-mode host-mcp
+waldo claude
 ```
 
 安装脚本自动下载本机 Mac 程序及两个 Linux B 配套程序，以 `sha256sum` 或系统 `shasum -a 256` 校验后安装到 `~/.local/bin`。若该目录尚未在 PATH 中，按脚本提示添加。
@@ -23,7 +23,7 @@ waldo claude --exec-mode host-mcp
 ```sh
 make build-pair BUILD="dev-$(date +%s)"
 ./waldo setup me@linux-server
-./waldo claude --exec-mode host-mcp
+./waldo claude
 ```
 
 将 `waldo`、`waldo-linux-amd64`、`waldo-linux-arm64` 放在同一目录。配套构建使用相同 Version/Build；仅运行 `make dev` 得到的本机文件哈希与 Linux 程序不同，不能作为跨系统配套版本。
@@ -37,7 +37,7 @@ make build-pair BUILD="dev-$(date +%s)"
 - 项目读写使用真实 Mac 工作区；HOME 为 Waldo 私有持久目录，TMPDIR/TMP/TEMP 为每会话私有目录。
 - 系统和已发现的工具链只读；宿主登录、SSH、Keychain 和 Waldo 策略/日志不向沙箱开放。
 - 文件工具和 shell 使用 Mac 工具链。B 的 `uname`、系统路径及原生程序仍属于 Linux，不能据此推断 A 的平台。
-- Claude 支持 host、host-mcp、remote；host-mcp 的项目 Bash/Read/Write 经过现有 SSH 通道在 Mac 沙箱执行。remote 的原生 Bash 留在 B，注入的 Bash MCP 默认使用 A。
+- Claude 支持 host、host-mcp（默认）、remote；host-mcp 的项目 Bash/Read/Write 经过现有 SSH 通道在 Mac 沙箱执行。remote 的原生 Bash 留在 B，注入的 Bash MCP 默认使用 A。
 - B 的 Claude 可复用其登录 shell 中的凭证、服务地址及模型变量。这些变量只在 B 注入 Agent，并在转发到 A 时清除；不会复制到 Mac 登录环境。
 
 Mac 没有挂载命名空间。硬编码 `/tmp/foo` 不会因 TMPDIR 设置而改写；B `/tmp` 与 A 私有 tmp 分开，跨端共享应使用会话说明公布的实际目录。Paseo skill 会复制为只读会话副本；文件工具可翻译 B 的 skill 路径，在 A 上执行 skill 配套命令时使用会话说明中的 A 路径。含符号链接或特殊文件的 skill 副本会被拒绝。

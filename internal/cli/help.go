@@ -94,7 +94,7 @@ SSH 状态: starting、connected、reconnecting；旧客户端未记录时为 un
 已删除配置的远端仍可筛选历史日志；旧版未标记远端的日志无法按名称筛选。
 `,
 	"run": `用法: waldo run [--remote <名称>] [--observe[=true|false]] [--exec-mode host|remote|host-mcp] -- <命令> [参数...]
-用空 profile 运行任意 CLI Agent。默认模式为 host；remote/host-mcp 需 profile 支持 MCP。
+用空 profile 运行任意 CLI Agent。默认模式为 host（空 profile 不支持 MCP）；remote/host-mcp 需 profile 支持 MCP。
 -- 后的参数原样传给命令，不再解析 Waldo 参数。
 `,
 	"allow": `用法: waldo allow [--global] <域名>...
@@ -126,7 +126,7 @@ func showHelp(topic []string, out io.Writer) int {
 	if _, ok := cfg.Profiles()[key]; ok {
 		fmt.Fprintf(out, `用法: waldo %s [--remote <名称>] [--paseo] [--observe[=true|false]] [--exec-mode host|remote|host-mcp] [Agent 参数...]
 Waldo 参数放在 Agent 参数之前；--paseo 由 Paseo 启动时使用。
-host: 命令在本机沙箱；remote: 内置 Bash 在远端；host-mcp: 同名 MCP 工具按路径分发。
+host-mcp（支持 MCP 的 Agent 默认）: 同名 MCP 工具按路径分发；host: 命令在本机沙箱（其余 Agent 默认）；remote: 内置 Bash 在远端。
 选择顺序: --remote、default_remote、原有 host；未设置 host 时，唯一命名远端自动选中。
 Agent 自身的帮助: waldo %s --help（将连接远端）。
 `, key, key)

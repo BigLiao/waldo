@@ -60,7 +60,7 @@ host = "me@my-server"
 # remote_dir = "~/.local/share/waldo"           # B 上的数据目录
 
 [execution]
-mode = "host"                     # host 默认；remote 远端 Bash；host-mcp 同名 MCP 工具按 location 分发
+mode = "host-mcp"                 # 未设置时：支持 MCP 的 Agent（Claude）用 host-mcp，其余用 host；remote 远端 Bash
 
 [sandbox]
 expose_ro = ["~/.config/nvim"]     # 自动探测的工具链之外再只读挂载
@@ -118,7 +118,7 @@ ssh_args = ["-i", "/home/me/.ssh/server-2"]
 waldo setup --remote b1          # 配置写好后逐台初始化，不修改默认远端
 waldo setup --remote b2
 waldo doctor --remote b2
-waldo claude --remote b2 --exec-mode host-mcp
+waldo claude --remote b2
 ```
 
 原有 `waldo setup user@host` 仍只写入顶层 `host`，不会改变 `default_remote`。命名远端的地址直接编辑配置，不与 setup 的位置地址同时使用。`--remote` 放在 Agent 参数之前，也可放在 `waldo` 与 Agent 名称之间；`waldo run --remote b2 -- <命令>` 同样支持。
@@ -189,7 +189,7 @@ waldo doctor
 
 ```sh
 cd ~/projects/miniapp
-waldo claude --exec-mode host-mcp
+waldo claude
 ```
 
 `waldo doctor` 会显示 WSL 实际运行的网络模式。若显示 `none`，先检查 Windows 上的 WSL 启动错误与 `%UserProfile%\.wslconfig`。在可联网的 NAT 或 mirrored 模式下即可连接 B。[WSL 网络说明](https://learn.microsoft.com/en-us/windows/wsl/networking)
@@ -214,20 +214,20 @@ net.windows_ports = [9420]
 
 ## 命令执行模式
 
-`host-mcp` 禁用 Claude 内置 Bash、Read、Grep、Glob、Edit、Write、NotebookEdit，提供同名 MCP 工具（如 `mcp__waldo__Read`），参数沿用原工具，额外增加 `location = auto | host | agent`。使用 `waldo claude --paseo --exec-mode host-mcp` 或 `[execution] mode = "host-mcp"` 开启，未设置 `MCP_TIMEOUT` 时，MCP 启动等待上限为 180 秒，以容纳投影文件造成的启动阻塞。项目挂载仍用于说明和 skills 加载；B 保留原生 shell，仅启动时 PATH 中的 Git 探测转发 A。
+`host-mcp` 禁用 Claude 内置 Bash、Read、Grep、Glob、Edit、Write、NotebookEdit，提供同名 MCP 工具（如 `mcp__waldo__Read`），参数沿用原工具，额外增加 `location = auto | host | agent`。这是 Claude 等支持 `--mcp-config` 的 Agent 的默认模式（不支持的 Agent 默认 `host`），可用 `--exec-mode host` 或 `[execution] mode = "host"` 关闭；未设置 `MCP_TIMEOUT` 时，MCP 启动等待上限为 180 秒，以容纳投影文件造成的启动阻塞。项目挂载仍用于说明和 skills 加载；B 保留原生 shell，仅启动时 PATH 中的 Git 探测转发 A。
 
 文件工具默认按挂载来源分发：项目/共享路径走 A，B 的 memory、会话记录和 `/tmp` 留在 B；项目位于 `/tmp` 下时该子目录仍走 A。`host` 强制访问 A，`agent` 访问 B 本地文件（不能绕过项目投影）；找不到不会换端重试，跨两端的目录搜索需拆开。Read/Edit/Write 使用 `file_path`，Grep/Glob 使用 `pattern` 和可选 `path`，NotebookEdit 使用 `notebook_path`。先 Read 再修改已有文件，版本检查由 MCP 内部管理，不需要传 hash；外部变更后需重读，此检查不承诺与外部写入者严格互斥。
 
 Read 默认 2000 行、文本输出最多 64 KiB，`allow_large` 提高到 1 MiB（文件上限从 16 MiB 提高到 64 MiB）。支持图片（最多 4 MiB）；PDF `pages` 目前只提取文字，需要所选端安装 pdfinfo/pdftotext。Grep 支持原有过滤、上下文、输出模式和 `head_limit`/`offset`；Glob 按修改时间排序。参数 JSON 上限 1 MiB，搜索输出上限 64 KiB；Write 自动创建父目录。
 
-默认 `host` 沿用原行为：B 上的 PATH 命令转发到 A 的沙箱。可在全局或项目配置中选择 `remote`，也可用启动参数临时覆盖（参数放在 Agent 参数之前）：
+`host` 沿用原有投影行为：B 上的 PATH 命令转发到 A 的沙箱，是 Codex 和空 profile 的默认模式。Claude 默认 `host-mcp`。可在全局或项目配置中选择 `host` 或 `remote`，也可用启动参数临时覆盖（参数放在 Agent 参数之前）：
 
 ```sh
 waldo claude --exec-mode remote
-waldo claude --paseo --exec-mode host  # 临时覆盖配置，恢复本机执行
+waldo claude --exec-mode host          # 改用内置文件工具和投影访问
 ```
 
-`remote` 模式下，内置 Bash 及普通子命令在 B 的胶囊中执行，使用 B 的标准系统工具（`/usr/bin`、`/usr/local/bin` 等）；Python 等所需依赖需在 B 安装。Waldo 自动注入 stdio MCP 工具 `mcp__waldo__Bash`，需要 A 的虚拟环境、构建测试依赖或本机服务时调用它。工具复用当前 SSH 的原有 exec 通道，默认在 A 沙箱执行，`location=agent` 可指定 B；不增加 MCP 安装步骤或宿主机权限。与 `--paseo` 可同时使用；目前内置 Claude 支持，自定义 profile 需声明 `mcp_config_flag = "--mcp-config"`，使用相同配置格式。Codex 和空 profile 暂不支持此模式，可用 `--exec-mode host` 覆盖全局设置。
+`remote` 模式下，内置 Bash 及普通子命令在 B 的胶囊中执行，使用 B 的标准系统工具（`/usr/bin`、`/usr/local/bin` 等）；Python 等所需依赖需在 B 安装。Waldo 自动注入 stdio MCP 工具 `mcp__waldo__Bash`，需要 A 的虚拟环境、构建测试依赖或本机服务时调用它。工具复用当前 SSH 的原有 exec 通道，默认在 A 沙箱执行，`location=agent` 可指定 B；不增加 MCP 安装步骤或宿主机权限。与 `--paseo` 可同时使用；目前内置 Claude 支持，自定义 profile 需声明 `mcp_config_flag = "--mcp-config"`，使用相同配置格式。Codex 和空 profile 暂不支持此模式；未配置模式时它们自动使用 `host`，若全局显式设置了 `remote`/`host-mcp`，需用 `--exec-mode host` 覆盖。
 
 `Bash` 使用原有 `command`、`timeout`（毫秒）、`description`、`run_in_background` 和 `dangerouslyDisableSandbox` 参数，加 `location`。auto 默认 A，agent 使用 B 的工具链/网络/tmp；A 使用原有沙箱环境，不继承 B 凭证。每次命令独立，切换目录用 `command` 中的 `cd`，不提供 `cwd` 参数。前台默认 120 秒、最多 10 分钟；后台默认 30 分钟、最多 2 小时，用同一 MCP 的 TaskOutput/TaskStop 查询和取消，无自动完成通知。两端均保留沙箱限制，`dangerouslyDisableSandbox=true` 报错；退出 MCP 会取消任务。stdout/stderr 各最多 128 KiB，超限标记 truncated。
 
@@ -301,7 +301,7 @@ content_cache_ttl = "0s"
 
 `host-mcp` 对项目及显式只读 skill 挂载启用短缓存：属性/目录项最多 2 秒，不存在的路径最多 1 秒；均受 `metadata_cache_ttl` 限制，设为 `0s` 可关闭。内容代理开启时也生效，仍保留 `direct_io` 和逐文件打开校验；不缓存目录列表，不增加文件监听或推送。自动加载的配置/skills 可能延迟这段时间才看到变化，MCP 对 A 的文件读写直接执行，不经过挂载缓存。共享运行目录和会话指南保持无元数据缓存。B 的 `host.log` 同时记录实际属性缓存和负缓存 TTL。
 
-大型仓库、目录遍历和 Git 仍可能产生大量元数据往返，按文件校验主要减少正文重传，并不保证它们变快。普通命令建议保持默认 `host` 模式；实际收益应以真实双机和 FUSE 工作负载衡量，不能把缓存命中率直接当作整个 Agent 的提速比例。
+大型仓库、目录遍历和 Git 仍可能产生大量元数据往返，按文件校验主要减少正文重传，并不保证它们变快。Claude 默认的 `host-mcp` 让项目读写和搜索直接在 A 完成，可绕开大部分投影往返；使用 `host` 模式时，实际收益应以真实双机和 FUSE 工作负载衡量，不能把缓存命中率直接当作整个 Agent 的提速比例。
 
 ## Agent 会话说明
 
