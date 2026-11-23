@@ -34,6 +34,7 @@ import (
 
 // Options for one agent session.
 type Options struct {
+	LocalSandbox    *bool  // nil inherits global/project configuration
 	ExecMode        string // empty inherits global/project configuration
 	Observe         *bool  // nil inherits global/project configuration
 	Paseo           bool
@@ -79,7 +80,7 @@ func CheckProject(project, home string) error {
 		return nil
 	}
 	if project == "/" || project == home || util.Within(home, project) {
-		return fmt.Errorf("项目目录 %s 太宽（会把整个家目录交给沙箱）。请 cd 到具体项目目录再运行", project)
+		return fmt.Errorf("项目目录 %s 太宽（会将整个家目录投影给远端）。请 cd 到具体项目目录再运行", project)
 	}
 	return nil
 }
@@ -193,6 +194,9 @@ func Run(o Options) int {
 	if o.Observe != nil {
 		pol.ObserveEnabled = *o.Observe
 	}
+	if o.LocalSandbox != nil {
+		pol.SandboxEnabled = *o.LocalSandbox
+	}
 	// Discovery subcommands neither call tools nor models and can reject the
 	// session-only settings/telemetry arguments used by the observers.
 	if probe {
@@ -244,7 +248,7 @@ func Run(o Options) int {
 
 	// What B sees through the file projection.
 	mounts := []string{project}
-	if pol.ExecMode != proto.ExecHostMCP && !util.Within(project, "/tmp") {
+	if pol.ExecMode != proto.ExecHostMCP && (!util.Within(project, "/tmp") || !pol.SandboxEnabled && project != "/tmp") {
 		mounts = append(mounts, "/tmp")
 	}
 	var mkdirs []string
@@ -263,8 +267,13 @@ func Run(o Options) int {
 		guide = contextGuide(pol, host, o.Profile.Name, cwd, mounts)
 	}
 
-	al.Log("session", map[string]any{"agent": o.Profile.Name, "project": project, "host": host, "args": paseo.AuditArgs(o.Args), "paseo": o.paseoBroker != nil, "exec_mode": o.ExecMode, "observe": pol.ObserveEnabled, "metadata_cache_ttl": pol.MetadataCacheTTL.String(), "content_cache_ttl": pol.ContentCacheTTL.String()})
-	snap := sandbox.TakeSnapshot(project)
+	al.Log("session", map[string]any{"agent": o.Profile.Name, "project": project, "host": host, "args": paseo.AuditArgs(o.Args), "paseo": o.paseoBroker != nil, "exec_mode": o.ExecMode, "local_sandbox": pol.SandboxEnabled, "observe": pol.ObserveEnabled, "metadata_cache_ttl": pol.MetadataCacheTTL.String(), "content_cache_ttl": pol.ContentCacheTTL.String()})
+	var snap sandbox.Snapshot
+	if pol.SandboxEnabled {
+		snap = sandbox.TakeSnapshot(project)
+	} else if !probe {
+		warnf("本机沙箱已关闭，远端可使用本机当前用户的文件权限和网络")
+	}
 
 	state := RunState{PID: os.Getpid(), Session: id, Agent: o.Profile.Name, Project: project, Host: host, Remote: remote, Connection: "starting"}
 	statePath := filepath.Join(RunDir(), fmt.Sprintf("%d.json", os.Getpid()))
@@ -285,7 +294,7 @@ func Run(o Options) int {
 	writeState(nil)
 	defer os.Remove(statePath)
 
-	sb, err := StartSandbox(SandboxOptions{Home: home, Project: project, Policy: pol, Audit: al, DataDir: dataDir, Mkdirs: mkdirs, OnPorts: writeState, ContextGuide: guide, ReadOnlyMounts: skillMounts})
+	sb, err := StartSandbox(SandboxOptions{Home: home, Project: project, Policy: pol, Audit: al, DataDir: dataDir, Mkdirs: mkdirs, OnPorts: writeState, ContextGuide: guide, ReadOnlyMounts: skillMounts, Unsandboxed: !pol.SandboxEnabled})
 	if err != nil {
 		warnf("%v", err)
 		return 1
@@ -294,8 +303,8 @@ func Run(o Options) int {
 	sb.Observe = pol.ObserveEnabled
 	sb.ModelTelemetry = o.Profile.Telemetry
 
-	for i, p := range mounts {
-		mounts[i] = sb.ExportPath(p)
+	for i := 1; i < len(mounts); i++ {
+		mounts[i] = sb.ExportPath(mounts[i])
 	}
 	for i, p := range o.readOnlyMounts {
 		o.readOnlyMounts[i] = sb.ExportPath(p)

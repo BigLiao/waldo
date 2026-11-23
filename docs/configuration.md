@@ -7,7 +7,7 @@
 | 命令 | 作用 |
 |---|---|
 | `waldo setup <host> [--adopt-login=false] [--skip-deps]` | 自动安装两端缺少的系统依赖，写入 `host`，安装/升级 B 端二进制，默认复用 B 上已有的 Agent 配置与登录，运行 doctor；`--adopt-login=false` 停止共享已有状态目录；`--skip-deps` 跳过系统依赖安装 |
-| `waldo doctor` | 两端依赖、bwrap 能否建沙箱、Agent 是否安装/已有登录态、时钟偏差 |
+| `waldo doctor` | 两端依赖、已启用的本机沙箱、Agent 是否安装/已有登录态、时钟偏差 |
 | `waldo remote ls [--json]` | 查看远端配置、默认选择及本机活跃会话数，不连接 SSH |
 | `waldo remote status [名称 \| --all] [--timeout 10s] [--json]` | 检查远端 SSH、Waldo 版本及依赖；不安装、升级或启动 Agent |
 | `waldo sessions [--remote 名称] [--json]` | 查看本机活跃会话、目标机器及 SSH 状态 |
@@ -25,7 +25,7 @@
 ./waldo setup me@my-server
 ```
 
-`setup` 先检查 A 的 `ssh`、`bwrap` 和各 Agent profile 的 `needs`，再通过 SSH 检查 B 的 `bwrap`、`sshfs`、`fusermount3`。缺少时会显示待安装的软件包，调用系统包管理器安装，然后重新检查命令是否可用；依赖齐全时不会调用包管理器。支持 `apt-get`、`dnf`、`yum`、`pacman`、`apk`，包括使用 `dnf` 的 TencentOS。
+`setup` 先检查 A 的 `ssh` 和各 Agent profile 的 `needs`，再通过 SSH 检查 B 的 `bwrap`、`sshfs`、`fusermount3`。当前项目启用本机沙箱时，还会检查 A 上的 `bwrap`（Linux/WSL2）或 `sandbox-exec`（macOS）。缺少时会显示待安装的软件包，调用系统包管理器安装，然后重新检查命令是否可用。支持 `apt-get`、`dnf`、`yum`、`pacman`、`apk`，包括使用 `dnf` 的 TencentOS。
 
 安装系统包需要 root 或 sudo 权限。在终端中运行时可以输入两端各自的 sudo 密码；无终端时使用 `sudo -n`，权限不足会立即停止并给出该机器上的手工安装命令。需要自行管理依赖时用 `./waldo setup me@my-server --skip-deps`，仍会运行 `doctor`。自定义 profile 中未知的缺失命令会提示手动安装。
 
@@ -36,13 +36,14 @@ B 的 SSH 服务和 Agent 程序需要提前准备。`setup` 默认复用各 Age
 安装脚本也可以在源码目录单独运行，用于只准备某一端：
 
 ```sh
-sh internal/bootstrap/install.sh a bash git rg   # 在 A 上运行
+sh internal/bootstrap/install.sh a-direct bash git rg   # A 端默认模式
+sh internal/bootstrap/install.sh a bash git rg          # A 端启用沙箱
 sh internal/bootstrap/install.sh b               # 在 B 上运行
 ```
 
 ## 网络中断与重连
 
-运行中的会话默认启用 **90 秒限时重连**，无需配置。连接被检测为中断后，A 保留本地沙箱，B 保留原 Agent、终端和文件挂载；SSH 按退避间隔自动重试，重试间隔最长 5 秒。物理连接有心跳，静默断网通常约 5 秒后进入重连窗口。
+运行中的会话默认启用 **90 秒限时重连**，无需配置。连接被检测为中断后，A 保留本机执行进程，B 保留原 Agent、终端和文件挂载；SSH 按退避间隔自动重试，重试间隔最长 5 秒。物理连接有心跳，静默断网通常约 5 秒后进入重连窗口。
 
 重连继续使用原会话，已打开的 SFTP 文件句柄和命令通道保持不变，不会重新启动 Agent 或重新执行命令。断线期间，远端 Agent 的模型请求和本地已运行的命令可以继续；跨机文件访问、工具调用和输出可能等待恢复。每个方向最多缓冲 4 MiB，缓冲满后暂停写入，避免无限积压。
 
@@ -63,8 +64,9 @@ host = "me@my-server"
 mode = "host-mcp"                 # 未设置时：支持 MCP 的 Agent（Claude）用 host-mcp，其余用 host；remote 远端 Bash
 
 [sandbox]
+enabled = false                   # 本机沙箱默认关闭
 expose_ro = ["~/.config/nvim"]     # 自动探测的工具链之外再只读挂载
-pass_env  = ["ANTHROPIC_MODEL", "MY_APP_*"]   # 额外传入沙箱和 Agent 的环境变量（glob）
+pass_env  = ["ANTHROPIC_MODEL", "MY_APP_*"]   # 额外传入本机命令和 Agent 的环境变量（glob）
 
 [fs]
 metadata_cache_ttl = "10s"         # 内核属性/路径缓存；host-mcp 最多 2s；"0s" 关闭
@@ -79,6 +81,7 @@ ports = "auto"                        # "auto" | [3000, 5173] | "off"
 host_ports = [5432]                   # 沙箱可访问的宿主机服务
 
 [project."/home/me/work/shop"]
+sandbox.enabled = true            # 此项目启用本机沙箱
 net.allow = ["api.example.com"]
 net.host_ports = [5432, 6379]
 fs.metadata_cache_ttl = "30s"      # 当前项目覆盖全局 TTL
@@ -91,6 +94,20 @@ env = { CLAUDE_CODE_MAX_OUTPUT_TOKENS = "16000" }
 ```
 
 `waldo allow` 写的是 `~/.config/waldo/allowed.json`，与 `config.toml` 合并。
+
+### 本机沙箱
+
+配置优先级从高到低为 `--local-sandbox[=true|false]`、项目的 `sandbox.enabled`、全局的 `sandbox.enabled`、默认关闭。启动参数放在 Agent 参数或 `waldo run --` 的分隔符之前。
+
+```sh
+waldo claude --local-sandbox
+waldo claude --local-sandbox=false
+waldo run --local-sandbox -- my-agent
+```
+
+默认模式下，A 上的命令和文件服务使用当前用户的权限、真实 HOME 和本机网络。Waldo 继续通过白名单和 `pass_env` 构建会话环境，并为 A 分配会话专用的 `TMPDIR`。`host` 和 `remote` 模式下可用会话说明中的临时目录路径在 A 与 B 之间共享文件。B 的 `/tmp` 与 A 的实际 `/tmp` 各自独立。`expose_ro`、`[net]` 白名单和端口规则以及受保护文件的只读策略在开启本机沙箱时生效。开发服务在 A 上直接监听时，用其本机地址访问。
+
+升级后，省略 `sandbox.enabled` 的旧配置会采用默认关闭。要恢复此前的本机隔离，设置 `enabled = true`。 [安全说明](SECURITY.md)
 
 Paseo 的 Claude SDK 流式会话会显示“Waldo 正在启动”和初始化完成耗时。初始化期间暂存用户消息，SDK 控制请求照常通过；收到真实 `initialize` 成功应答后再发送消息。提示仅显示在聊天流，不发给模型；初始化完成不代表所有异步 MCP 连接都已完成。Paseo 开始消费首轮输出流后可见；创建 Agent 页面的等待状态仍由 Paseo 控制。普通 CLI 输出保持原格式。
 
@@ -172,7 +189,7 @@ Paseo 为每台机器配置独立 provider（合入 `~/.paseo/config.json`，替
 
 ### 安装和启动
 
-在 Windows PowerShell 中用 `wsl -l -v` 确认发行版的 VERSION 为 `2`，再用 `wsl -d Ubuntu` 进入发行版。安装和运行命令在 Ubuntu 的终端里执行。Waldo 复用 WSL 的 Linux 工具链和 bubblewrap，Agent 继续运行在你的 Linux B 上。[Microsoft WSL 安装说明](https://learn.microsoft.com/zh-cn/windows/wsl/install)
+在 Windows PowerShell 中用 `wsl -l -v` 确认发行版的 VERSION 为 `2`，再用 `wsl -d Ubuntu` 进入发行版。安装和运行命令在 Ubuntu 的终端里执行。Waldo 使用 WSL 的 Linux 工具链，启用本机沙箱时使用 bubblewrap。Agent 运行在 Linux B 上。[Microsoft WSL 安装说明](https://learn.microsoft.com/zh-cn/windows/wsl/install)
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/BigLiao/waldo/master/install.sh | sh
@@ -196,10 +213,11 @@ waldo claude
 
 ### 访问 Windows 调试服务
 
-若 Windows 工具在 `127.0.0.1` 上提供调试服务，添加项目级 `net.windows_ports`。以下以微信开发者工具的自动化端口为例，把端口号换成实际使用的值。
+默认模式使用 WSL 的本机网络。开启本机沙箱时，可添加项目级 `net.windows_ports` 来访问 Windows 的 `127.0.0.1` 调试服务。以下以微信开发者工具的自动化端口为例，把端口号换成实际使用的值。
 
 ```toml
 [project."~/projects/miniapp"]
+sandbox.enabled = true
 execution.mode = "host-mcp"
 net.windows_ports = [9420]
 ```
@@ -220,16 +238,16 @@ net.windows_ports = [9420]
 
 Read 默认 2000 行、文本输出最多 64 KiB，`allow_large` 提高到 1 MiB（文件上限从 16 MiB 提高到 64 MiB）。支持图片（最多 4 MiB）；PDF `pages` 目前只提取文字，需要所选端安装 pdfinfo/pdftotext。Grep 支持原有过滤、上下文、输出模式和 `head_limit`/`offset`；Glob 按修改时间排序。参数 JSON 上限 1 MiB，搜索输出上限 64 KiB；Write 自动创建父目录。
 
-`host` 沿用原有投影行为：B 上的 PATH 命令转发到 A 的沙箱，是 Codex 和空 profile 的默认模式。Claude 默认 `host-mcp`。可在全局或项目配置中选择 `host` 或 `remote`，也可用启动参数临时覆盖（参数放在 Agent 参数之前）：
+`host` 使用文件投影，B 上的 PATH 命令转发到 A，是 Codex 和空 profile 的默认模式。Claude 默认 `host-mcp`。可在全局或项目配置中选择 `host` 或 `remote`，也可用启动参数临时覆盖（参数放在 Agent 参数之前）：
 
 ```sh
 waldo claude --exec-mode remote
 waldo claude --exec-mode host          # 改用内置文件工具和投影访问
 ```
 
-`remote` 模式下，内置 Bash 及普通子命令在 B 的胶囊中执行，使用 B 的标准系统工具（`/usr/bin`、`/usr/local/bin` 等）；Python 等所需依赖需在 B 安装。Waldo 自动注入 stdio MCP 工具 `mcp__waldo__Bash`，需要 A 的虚拟环境、构建测试依赖或本机服务时调用它。工具复用当前 SSH 的原有 exec 通道，默认在 A 沙箱执行，`location=agent` 可指定 B；不增加 MCP 安装步骤或宿主机权限。与 `--paseo` 可同时使用；目前内置 Claude 支持，自定义 profile 需声明 `mcp_config_flag = "--mcp-config"`，使用相同配置格式。Codex 和空 profile 暂不支持此模式；未配置模式时它们自动使用 `host`，若全局显式设置了 `remote`/`host-mcp`，需用 `--exec-mode host` 覆盖。
+`remote` 模式下，内置 Bash 及普通子命令在 B 的胶囊中执行，使用 B 的标准系统工具（`/usr/bin`、`/usr/local/bin` 等）；Python 等所需依赖需在 B 安装。Waldo 自动注入 stdio MCP 工具 `mcp__waldo__Bash`，需要 A 的虚拟环境、构建测试依赖或本机服务时调用它。工具复用当前 SSH 的 exec 通道，默认在 A 执行，`location=agent` 可指定 B。与 `--paseo` 可同时使用；目前内置 Claude 支持，自定义 profile 需声明 `mcp_config_flag = "--mcp-config"`，使用相同配置格式。Codex 和空 profile 暂不支持此模式；未配置模式时它们自动使用 `host`，若全局显式设置了 `remote`/`host-mcp`，需用 `--exec-mode host` 覆盖。
 
-`Bash` 使用原有 `command`、`timeout`（毫秒）、`description`、`run_in_background` 和 `dangerouslyDisableSandbox` 参数，加 `location`。auto 默认 A，agent 使用 B 的工具链/网络/tmp；A 使用原有沙箱环境，不继承 B 凭证。每次命令独立，切换目录用 `command` 中的 `cd`，不提供 `cwd` 参数。前台默认 120 秒、最多 10 分钟；后台默认 30 分钟、最多 2 小时，用同一 MCP 的 TaskOutput/TaskStop 查询和取消，无自动完成通知。两端均保留沙箱限制，`dangerouslyDisableSandbox=true` 报错；退出 MCP 会取消任务。stdout/stderr 各最多 128 KiB，超限标记 truncated。
+`Bash` 使用原有 `command`、`timeout`（毫秒）、`description`、`run_in_background` 和 `dangerouslyDisableSandbox` 参数，加 `location`。auto 默认 A，agent 使用 B 的工具链、网络和临时目录。A 使用本机会话环境，不继承 B 凭证。每次命令独立，切换目录用 `command` 中的 `cd`。前台默认 120 秒、最多 10 分钟；后台默认 30 分钟、最多 2 小时，用同一 MCP 的 TaskOutput/TaskStop 查询和取消。会话启动时确定本机沙箱模式，`dangerouslyDisableSandbox=true` 报错。退出 MCP 会取消任务。stdout/stderr 各最多 128 KiB，超限标记 truncated。
 
 项目仍是同一份投影：缓存未命中的读和所有写入都经过 A，远端 Bash 写文件也会修改本机工作区。`waldo.md` 会按实际模式说明两种工具的用法；关闭 `[context] enabled` 时不注入该指南。B 的 Bash 使用 B 的网络和 localhost，A 的网络白名单、宿主机服务与开发端口转发适用于 `Bash`。实际加速取决于缓存命中、文件访问量及依赖是否适合在 B 运行。
 
@@ -259,7 +277,7 @@ enabled = false
 
 | 日志类型 | 内容与耗时范围 |
 |---|---|
-| `exec` / `exec-end` | 关联 ID、程序名、退出状态、耗时；从 A 可信客户端收到命令请求，到观察到退出结果，包含沙箱执行和输出收尾，不是纯程序运行时间，也不包含完整的 B 端工具调用时间 |
+| `exec` / `exec-end` | 关联 ID、程序名、退出状态、耗时；从 A 客户端收到命令请求，到观察到退出结果，包含本机执行和输出收尾 |
 | `file-read` / `file-write` | 每 5 秒汇总已完成的 SFTP 读写请求次数和累计耗时，流结束时补一次汇总；包含 OPEN 和属性、目录等请求，次数不等于文件数，失败回复也算完成；`scope=sftp_rpc` |
 | `model-call` | 通过配置或 `--observe` 开启后，原生客户端报告的模型请求次数、错误数和累计 `duration_ms`；Codex 的流事件处理时间另列 `stream_event_ms`，不能将它或 HTTP 请求耗时当作完整生成时长 |
 
@@ -281,7 +299,7 @@ Claude profile 在启用 `--observe` 时额外注入公开的 HTTP `PreToolUse`�
 
 ## 文件投射性能
 
-项目默认使用 B 上的会话内 SFTP 内容缓存。每次只读打开项目文件时，A 在沙箱内实际打开文件，取得该句柄的纳秒级修改时间、大小、设备及 inode，并在一次 SFTP 扩展请求中返回句柄和版本。B 逐文件比较版本：一致则复用缓存内容，不一致才在后续实际 READ 请求中取新内容。打开文件本身不预读正文，也不主动补全部分读取的文件。到达代理的属性查询和目录列表始终回源，删除、重命名和权限变化由 A 的实际文件操作处理。
+项目默认使用 B 上的会话内 SFTP 内容缓存。每次只读打开项目文件时，A 实际打开文件，取得该句柄的纳秒级修改时间、大小、设备及 inode，并在一次 SFTP 扩展请求中返回句柄和版本。B 逐文件比较版本：一致则复用缓存内容，不一致才在后续实际 READ 请求中取新内容。打开文件本身不预读正文，也不主动补全部分读取的文件。到达代理的属性查询和目录列表始终回源，删除、重命名和权限变化由 A 的实际文件操作处理。
 
 A 不再安装项目目录监听器，链路没有缓存通知、心跳或命令完成失效屏障；其他进程持续修改日志等无关文件不会清空源码缓存。所有写入仍由 A 原有 SFTP 服务执行；每次后续打开独立校验，无需先推送或全局清缓存。校验与打开使用同一个文件句柄，已有只读句柄可以保持本次打开时的缓存快照，重新打开才检查路径当前版本。
 

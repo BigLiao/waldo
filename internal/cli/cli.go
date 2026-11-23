@@ -26,12 +26,12 @@ import (
 	"waldo/internal/wsl"
 )
 
-const usage = `waldo — Agent 跑在你的服务器上，它的"手"落在这台机器的沙箱里
+const usage = `waldo — Agent 跑在你的服务器上，项目工具可在本机执行
 
 用法:
   waldo setup [<user@host> | --remote <名称>] [--adopt-login=false] [--skip-deps]
                                              默认复用 B 的配置和登录，自动补齐依赖并检查
-  waldo <agent> [--remote <名称>] [--paseo] [--observe[=true|false]] [--exec-mode host|remote|host-mcp] [参数...]
+  waldo <agent> [--remote <名称>] [--local-sandbox[=true|false]] [--paseo] [--observe[=true|false]] [--exec-mode host|remote|host-mcp] [参数...]
                                              运行 Agent（内置: %s）；--observe 控制模型及工具耗时统计
   waldo run [--] <命令> [参数...]             用空 profile 运行任意 CLI Agent
   waldo doctor [--remote <名称>]              检查两端依赖、时钟偏差、Agent 安装/登录
@@ -48,6 +48,7 @@ const usage = `waldo — Agent 跑在你的服务器上，它的"手"落在这�
 示例:
   waldo claude                                原有单机配置直接使用，无需 --remote
   waldo claude --remote b2                     选择命名远端
+  waldo claude --local-sandbox                为本次会话启用本机沙箱（默认关闭）
   waldo remote status --all                    检查全部机器
   waldo help remote                           查看远端管理帮助
 
@@ -93,6 +94,12 @@ func Main(args []string) int {
 	if opts.Observe != nil && args[0] != "run" {
 		if _, ok := profiles[args[0]]; !ok {
 			fmt.Fprintln(os.Stderr, "waldo: --observe 只用于 Agent 或 run")
+			return 2
+		}
+	}
+	if opts.LocalSandbox != nil && args[0] != "run" {
+		if _, ok := profiles[args[0]]; !ok {
+			fmt.Fprintln(os.Stderr, "waldo: --local-sandbox 只用于 Agent 或 run")
 			return 2
 		}
 	}
@@ -152,7 +159,7 @@ func Main(args []string) int {
 			return 2
 		}
 		runOpts.inherit(opts)
-		return session.Run(session.Options{Config: cfg, Profile: profile.Empty(a[0]), Args: a[1:], Observe: runOpts.Observe, ExecMode: runOpts.ExecMode, Remote: runOpts.Remote})
+		return session.Run(session.Options{Config: cfg, Profile: profile.Empty(a[0]), Args: a[1:], Observe: runOpts.Observe, ExecMode: runOpts.ExecMode, Remote: runOpts.Remote, LocalSandbox: runOpts.LocalSandbox})
 	}
 	if p, ok := profiles[args[0]]; ok {
 		agentArgs, agentOpts, err := wrapperPrefix(args[1:])
@@ -161,7 +168,7 @@ func Main(args []string) int {
 			return 2
 		}
 		agentOpts.inherit(opts)
-		return session.Run(session.Options{Config: cfg, Profile: p, Args: agentArgs, Paseo: agentOpts.Paseo, Observe: agentOpts.Observe, ExecMode: agentOpts.ExecMode, Remote: agentOpts.Remote})
+		return session.Run(session.Options{Config: cfg, Profile: p, Args: agentArgs, Paseo: agentOpts.Paseo, Observe: agentOpts.Observe, ExecMode: agentOpts.ExecMode, Remote: agentOpts.Remote, LocalSandbox: agentOpts.LocalSandbox})
 	}
 	fmt.Fprintf(os.Stderr, "waldo: 未知命令或 Agent %q（waldo help 查看用法；任意命令请用 waldo run -- %s）\n", args[0], args[0])
 	return 2
@@ -170,13 +177,17 @@ func Main(args []string) int {
 // Only consume wrapper flags before agent arguments. Literal --paseo or
 // --observe supplied after -p or -- remain agent arguments.
 type wrapperOptions struct {
-	Paseo    bool
-	Observe  *bool
-	ExecMode string
-	Remote   string
+	LocalSandbox *bool
+	Paseo        bool
+	Observe      *bool
+	ExecMode     string
+	Remote       string
 }
 
 func (o *wrapperOptions) inherit(parent wrapperOptions) {
+	if o.LocalSandbox == nil {
+		o.LocalSandbox = parent.LocalSandbox
+	}
 	o.Paseo = o.Paseo || parent.Paseo
 	if o.Observe == nil {
 		o.Observe = parent.Observe
@@ -195,6 +206,9 @@ func wrapperPrefix(args []string) ([]string, wrapperOptions, error) {
 		switch args[0] {
 		case "--paseo":
 			opts.Paseo = true
+		case "--local-sandbox", "--local-sandbox=true", "--local-sandbox=false":
+			enabled := args[0] != "--local-sandbox=false"
+			opts.LocalSandbox = &enabled
 		case "--observe":
 			enabled := true
 			opts.Observe = &enabled
@@ -238,6 +252,9 @@ func wrapperPrefix(args []string) ([]string, wrapperOptions, error) {
 			}
 			if strings.HasPrefix(args[0], "--observe=") {
 				return nil, opts, fmt.Errorf("--observe expects true or false")
+			}
+			if strings.HasPrefix(args[0], "--local-sandbox=") {
+				return nil, opts, fmt.Errorf("--local-sandbox 只接受 true 或 false")
 			}
 			return args, opts, nil
 		}
@@ -308,12 +325,21 @@ func setup(cfg *config.Config, args []string) int {
 	}
 	cfg = selected
 	hostArg = cfg.Host
+	localSandbox, err := localSandboxForCWD(cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "waldo: %v\n", err)
+		return 2
+	}
 	if name != "" {
 		fmt.Printf("远端 %s（%s）\n", name, termfilter.Sanitize(hostArg))
 	}
 	if !*skipDeps {
 		fmt.Println("A（本机）：检查并安装缺少的系统依赖…")
-		if err := bootstrap.Install("a", profileNeeds(cfg.Profiles()), os.Stdin, os.Stdout, os.Stderr); err != nil {
+		role := "a-direct"
+		if localSandbox {
+			role = "a"
+		}
+		if err := bootstrap.Install(role, profileNeeds(cfg.Profiles()), os.Stdin, os.Stdout, os.Stderr); err != nil {
 			fmt.Fprintf(os.Stderr, "waldo: A 端依赖初始化失败: %v\n", err)
 			return 1
 		}
@@ -361,7 +387,7 @@ func setup(cfg *config.Config, args []string) int {
 	} else {
 		fmt.Println("✓ 已停止共享 B 上已有的 Agent 状态目录（保留 waldo 的独立状态和已有文件副本）")
 	}
-	return doctor(cfg)
+	return doctor(cfg, localSandbox)
 }
 
 func flagSet(fs *flag.FlagSet, name string) bool {
@@ -388,7 +414,24 @@ func doctorCommand(cfg *config.Config, args []string) int {
 	if name != "" {
 		fmt.Printf("远端 %s\n", name)
 	}
-	return doctor(selected)
+	localSandbox, err := localSandboxForCWD(selected)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "waldo: %v\n", err)
+		return 2
+	}
+	return doctor(selected, localSandbox)
+}
+
+func localSandboxForCWD(cfg *config.Config) (bool, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return false, err
+	}
+	policy, err := cfg.PolicyFor(session.ProjectDir(cwd))
+	if err != nil {
+		return false, err
+	}
+	return policy.SandboxEnabled, nil
 }
 
 func indent(s string) string {
@@ -426,7 +469,7 @@ func profileNeeds(profiles map[string]profile.Profile) []string {
 
 var checkLocalSandbox = sandbox.Probe
 
-func doctor(cfg *config.Config) int {
+func doctor(cfg *config.Config, localSandbox bool) int {
 	bad := 0
 	distro := host.Distro()
 	fmt.Println("A（本机）:")
@@ -436,15 +479,21 @@ func doctor(cfg *config.Config) int {
 		if mode == "none" {
 			fmt.Println("      检查 WSL 启动错误与 Windows 用户目录中的 .wslconfig")
 		}
-		if bridge, err := wsl.NewPortBridge(); err != nil {
-			fmt.Printf("  ! Windows 回环端口桥接不可用: %v\n", err)
-		} else {
-			bridge.Close()
+		if localSandbox {
+			if bridge, err := wsl.NewPortBridge(); err != nil {
+				fmt.Printf("  ! Windows 回环端口桥接不可用: %v\n", err)
+			} else {
+				bridge.Close()
+			}
 		}
 	}
-	localBins := []string{"ssh", "bwrap"}
-	if runtime.GOOS == "darwin" {
-		localBins = []string{"ssh", "/usr/bin/sandbox-exec"}
+	localBins := []string{"ssh"}
+	if localSandbox {
+		if runtime.GOOS == "darwin" {
+			localBins = append(localBins, "/usr/bin/sandbox-exec")
+		} else {
+			localBins = append(localBins, "bwrap")
+		}
 	}
 	for _, bin := range localBins {
 		p, err := exec.LookPath(bin)
@@ -456,17 +505,22 @@ func doctor(cfg *config.Config) int {
 			}
 		}
 	}
-	if err := checkLocalSandbox(); err != nil {
-		bad++
-		fmt.Printf("  ✗ 本机沙箱验证失败: %v\n", err)
-	} else {
-		fmt.Println("  ✓ 本机沙箱可执行，平台隔离检查通过")
-	}
 	home, _ := os.UserHomeDir()
-	tc := sandbox.DetectToolchains(home)
-	fmt.Printf("  ✓ 只读挂载的工具链: %s\n", strings.Join(shortHome(tc, home), " "))
+	var tc []string
+	if localSandbox {
+		if err := checkLocalSandbox(); err != nil {
+			bad++
+			fmt.Printf("  ✗ 本机沙箱验证失败: %v\n", err)
+		} else {
+			fmt.Println("  ✓ 本机沙箱可执行，平台隔离检查通过")
+		}
+		tc = sandbox.DetectToolchains(home)
+		fmt.Printf("  ✓ 只读挂载的工具链: %s\n", strings.Join(shortHome(tc, home), " "))
+	} else {
+		fmt.Println("  本机沙箱已关闭")
+	}
 	visible := func(p string) bool {
-		if !strings.HasPrefix(p, home+"/") {
+		if !localSandbox || !strings.HasPrefix(p, home+"/") {
 			return true
 		}
 		for _, d := range tc {

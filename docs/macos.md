@@ -1,6 +1,6 @@
 # macOS 本机端
 
-macOS 作为 A，Agent 继续运行在 Linux B。Mac 使用原生 Seatbelt 执行本机工具，不需要安装 macFUSE、SSHFS 或虚拟机。Linux A 与 Mac A 可以同时连接同一 B：每个连接运行独立 Agent 进程，B 的 Claude 安装、登录、配置和历史继续共享。
+macOS 作为 A，Agent 运行在 Linux B。Mac 默认直接执行本机工具，启用本机沙箱后使用原生 Seatbelt。Linux A 与 Mac A 可以同时连接同一 B，每个连接运行独立 Agent 进程，并共享 B 的 Claude 安装、登录、配置和历史。
 
 当前已在 Apple Silicon、macOS 15.6.1 上运行原生回归，并交叉构建 darwin/amd64。Intel Mac 的原生运行仍需验证。
 
@@ -30,9 +30,11 @@ make build-pair BUILD="dev-$(date +%s)"
 
 `make release` 生成 Linux/macOS、amd64/arm64 四种程序和校验文件。
 
-`setup` 使用已有 Homebrew 安装缺失的 git、bash、ripgrep，不自动安装 Homebrew。Seatbelt 不可用时启动失败，不回退为直接执行。`doctor` 会实际验证沙箱可执行、项目可写、秘密文件不可读及 Git 配置不可改。
+`setup` 使用已有 Homebrew 安装缺失的 git、bash、ripgrep。启用本机沙箱时，Seatbelt 不可用会使会话启动失败。`doctor` 按当前项目设置检查本机沙箱，开启时会验证项目可写、秘密文件不可读及 Git 配置不可改。
 
-## 本机执行环境
+## Seatbelt 会话
+
+用 `waldo claude --local-sandbox` 或 `[sandbox] enabled = true` 开启。下文的私有 HOME、文件保护和网络代理适用于 Seatbelt 会话。默认直接执行时，命令使用当前用户的真实 HOME、文件权限和网络，A 仍分配每会话的 `TMPDIR`。
 
 - 项目读写使用真实 Mac 工作区；HOME 为 Waldo 私有持久目录，TMPDIR/TMP/TEMP 为每会话私有目录。
 - 系统和已发现的工具链只读；宿主登录、SSH、Keychain 和 Waldo 策略/日志不向沙箱开放。

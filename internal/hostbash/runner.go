@@ -44,7 +44,7 @@ func (r *routedRunner) Run(ctx context.Context, c Call) (Result, error) {
 func (r *routedRunner) execute(ctx context.Context, c Call) (res Result, err error) {
 	res.ExitCode = 255
 	if c.DisableSandbox {
-		return res, fmt.Errorf("dangerouslyDisableSandbox is unsupported: Waldo sandbox restrictions always apply")
+		return res, fmt.Errorf("dangerouslyDisableSandbox is unsupported: the local sandbox mode is set when starting Waldo")
 	}
 	side := "host"
 	key := ""

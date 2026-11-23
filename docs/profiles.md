@@ -29,7 +29,7 @@ state  = ["~/.claude", "~/.claude.json"]
 
 [agent.codex]
 bin    = "codex"
-args   = ["--sandbox", "danger-full-access"]   # 由 waldo 的沙箱接管（审批策略不变）
+args   = ["--sandbox", "danger-full-access"]   # 让 Codex 子进程使用 Waldo 会话的执行环境
 scrub  = ["OPENAI_API_KEY", "CODEX_API_KEY"]
 needs  = ["git", "bash"]
 state  = ["~/.codex"]

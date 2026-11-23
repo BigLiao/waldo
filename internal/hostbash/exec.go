@@ -40,7 +40,7 @@ func Main(args []string) int {
 }
 
 // Execute reuses the stub socket and framed exec protocol. Closing that socket
-// on timeout/cancellation kills the command's process group in A's sandbox.
+// on timeout/cancellation kills the command's process group on A.
 func Execute(parent context.Context, socket, shell, cwd string, call Call) (res Result, err error) {
 	res.ExitCode = 255
 	if (call.Tool == "" && !validCall(call)) || (call.Tool != "" && !hosttools.Known(call.Tool)) {
@@ -57,7 +57,7 @@ func Execute(parent context.Context, socket, shell, cwd string, call Call) (res 
 	defer cancel()
 	conn, err := (&net.Dialer{}).DialContext(ctx, "unix", socket)
 	if err != nil {
-		return res, fmt.Errorf("A sandbox unavailable: %w", err)
+		return res, fmt.Errorf("A command channel unavailable: %w", err)
 	}
 	defer conn.Close()
 	stop := context.AfterFunc(ctx, func() { conn.Close() })

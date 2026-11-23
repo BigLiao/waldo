@@ -26,3 +26,28 @@ func TestExecutionPolicy(t *testing.T) {
 		}
 	}
 }
+
+func TestLocalSandboxPolicy(t *testing.T) {
+	cfg := loadCacheConfig(t, `[sandbox]
+enabled = true
+[project."/off".sandbox]
+enabled = false
+[project."/inherit".sandbox]
+pass_env = ["EXTRA"]
+`)
+	for project, want := range map[string]bool{"/off": false, "/inherit": true, "/other": true} {
+		p, err := cfg.PolicyFor(project)
+		if err != nil || p.SandboxEnabled != want {
+			t.Fatalf("%s: policy=%+v err=%v, want sandbox=%t", project, p, err, want)
+		}
+	}
+	cfg = loadCacheConfig(t, `[project."/on".sandbox]
+enabled = true
+`)
+	for project, want := range map[string]bool{"/on": true, "/other": false} {
+		p, err := cfg.PolicyFor(project)
+		if err != nil || p.SandboxEnabled != want {
+			t.Fatalf("%s: policy=%+v err=%v, want sandbox=%t", project, p, err, want)
+		}
+	}
+}

@@ -101,7 +101,7 @@ esac
 
 func TestSetupInstallsBeforeConnecting(t *testing.T) {
 	log := setupTestEnv(t, false)
-	cfg := &config.Config{}
+	cfg := &config.Config{Sandbox: config.SandboxCfg{Enabled: new(true)}}
 	if code := setup(cfg, []string{"example"}); code != 0 {
 		t.Fatalf("setup exit = %d", code)
 	}
@@ -136,7 +136,8 @@ func TestSetupStopsOnInstallFailure(t *testing.T) {
 		t.Run(side, func(t *testing.T) {
 			log := setupTestEnv(t, side == "B")
 			t.Setenv("SETUP_TEST_FAIL_"+side, "1")
-			if code := setup(&config.Config{}, []string{"example", "--adopt-login"}); code != 1 {
+			cfg := &config.Config{Sandbox: config.SandboxCfg{Enabled: new(true)}}
+			if code := setup(cfg, []string{"example", "--adopt-login"}); code != 1 {
 				t.Fatalf("setup exit = %d, want 1", code)
 			}
 			operations, _ := os.ReadFile(log)
@@ -156,7 +157,8 @@ func TestSetupSkipDepsStillChecks(t *testing.T) {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			log := setupTestEnv(t, false)
 			// Missing bwrap still makes doctor fail, but never triggers installation.
-			if code := setup(&config.Config{}, args); code != 1 {
+			cfg := &config.Config{Sandbox: config.SandboxCfg{Enabled: new(true)}}
+			if code := setup(cfg, args); code != 1 {
 				t.Fatalf("setup exit = %d, want 1", code)
 			}
 			operations, _ := os.ReadFile(log)
@@ -164,6 +166,20 @@ func TestSetupSkipDepsStillChecks(t *testing.T) {
 				t.Fatalf("operations = %q, want %q", got, want)
 			}
 		})
+	}
+}
+
+func TestSetupDefaultSkipsLocalSandboxDependency(t *testing.T) {
+	log := setupTestEnv(t, false)
+	if code := setup(&config.Config{}, []string{"example"}); code != 0 {
+		t.Fatalf("setup exit = %d, want 0", code)
+	}
+	operations, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(operations), "b-deps\nversion\nadopt\ndoctor\n"; got != want {
+		t.Fatalf("operations = %q, want %q", got, want)
 	}
 }
 

@@ -1,9 +1,5 @@
-// Package serve implements `waldo sandbox-serve`, the process inside the A
-// sandbox that answers every file and exec request coming from B.
-//
-// It is on the untrusted side of the boundary: whatever it does is confined
-// by the sandbox mounts and network namespace, not by checks in this code.
-// Its only channel is stdin/stdout to the host waldo process.
+// Package serve implements `waldo sandbox-serve`, the A-side worker
+// that answers file and exec requests coming from B.
 package serve
 
 import (
@@ -35,9 +31,6 @@ type server struct {
 
 // Main runs sandbox-serve on stdin/stdout.
 func Main() int {
-	if runtime.GOOS == "darwin" {
-		defer nativeJobs.close()
-	}
 	log.SetFlags(log.Ltime | log.Lmicroseconds)
 	log.SetPrefix("sandbox-serve: ")
 	rwc := util.RWC{R: os.Stdin, W: os.Stdout, C: []io.Closer{os.Stdin, os.Stdout}}
@@ -60,6 +53,9 @@ func Main() int {
 	if err := proto.ReadMsg(ctl, &s.cfg); err != nil {
 		log.Print(err)
 		return 1
+	}
+	if s.cfg.Native {
+		defer nativeJobs.close()
 	}
 	if s.cfg.ContextProject != "" {
 		contextFile := s.cfg.ContextFile
@@ -109,7 +105,7 @@ func (s *server) handle(st *yamux.Stream) {
 			st.Close()
 			return
 		}
-		runExec(st, h.Exec, s.cfg.ExecEnv)
+		runExec(st, h.Exec, s.cfg.ExecEnv, s.cfg.Native)
 	case proto.KindDial:
 		s.dial(st, h.Port)
 	default:

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -172,7 +173,7 @@ func (h *host) capsuleArgs(agentHome string, mnts []string, stubs map[string]str
 	if hl.ExecMode == proto.ExecRemote || hl.ExecMode == proto.ExecHostMCP {
 		a = append(a, remoteRuntimeArgs()...)
 	}
-	if hl.ExecMode == proto.ExecHostMCP || hl.Facts.OS == "darwin" {
+	if hl.ExecMode == proto.ExecHostMCP || hl.Facts.OS == "darwin" || !slices.Contains(hl.Mounts, "/tmp") {
 		a = append(a, "--tmpfs", "/tmp")
 	}
 
@@ -272,7 +273,17 @@ func (h *host) capsuleArgs(agentHome string, mnts []string, stubs map[string]str
 func (h *host) agentEnv() []string {
 	hl := h.hello
 	env := util.EnvFilter(hl.Facts.Env, func(k string) bool {
-		return util.IsProxyVar(k) || strings.HasPrefix(k, "WALDO_")
+		if util.IsProxyVar(k) || strings.HasPrefix(k, "WALDO_") {
+			return true
+		}
+		switch k {
+		case "TMPDIR", "TMP", "TEMP":
+			dir, _ := util.EnvGet(hl.Facts.Env, k)
+			return hl.ExecMode == proto.ExecHostMCP || !slices.ContainsFunc(hl.Mounts, func(m string) bool {
+				return filepath.IsAbs(dir) && util.Within(dir, m)
+			})
+		}
+		return false
 	})
 	keys := make([]string, 0, len(hl.Profile.Env))
 	for k := range hl.Profile.Env {

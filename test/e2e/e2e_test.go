@@ -62,7 +62,7 @@ func TestProbe(t *testing.T) {
 	}
 	e.WriteConfig("[sandbox]\npass_env = [\"E2E_*\"]\n")
 	port := harness.FreePort(t)
-	cmd := e.Cmd("run", "--", agent, "probe")
+	cmd := e.Cmd("run", "--local-sandbox", "--", agent, "probe")
 	cmd.Env = append(cmd.Env, "E2E_PORT="+strconv.Itoa(port), "FAKE_SECRET=x")
 	stdout, _ := cmd.StdoutPipe()
 	var stderr bytes.Buffer
@@ -281,7 +281,7 @@ func TestTTY(t *testing.T) {
 // An interactive shell as the agent: every command it runs goes to A.
 func TestInteractiveShell(t *testing.T) {
 	e, _ := setup(t)
-	cmd := e.Cmd("run", "--", "/bin/bash", "--norc", "--noprofile", "-i")
+	cmd := e.Cmd("run", "--local-sandbox", "--", "/bin/bash", "--norc", "--noprofile", "-i")
 	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 30, Cols: 100})
 	if err != nil {
 		t.Fatal(err)
@@ -327,7 +327,7 @@ func killSessionSSH(t *testing.T, cmd *exec.Cmd) {
 
 func TestReconnectAfterBrokenLink(t *testing.T) {
 	e, agent := setup(t)
-	cmd := e.Cmd("run", "--", agent, "reconnect")
+	cmd := e.Cmd("run", "--local-sandbox", "--", agent, "reconnect")
 	var output safeBuf
 	cmd.Stdout, cmd.Stderr = &output, &output
 	if err := cmd.Start(); err != nil {
@@ -486,7 +486,7 @@ func TestDifferentHome(t *testing.T) {
 	proj := filepath.Join(ahome, "work", "p")
 	os.MkdirAll(proj, 0o755)
 	exec.Command("git", "init", "-q", proj).Run()
-	cmd := e.Cmd("run", "--", "/bin/bash", "-c",
+	cmd := e.Cmd("run", "--local-sandbox", "--", "/bin/bash", "-c",
 		`echo "agent HOME=$HOME"; : > ~/agent-was-here; bash -c 'echo "cmd HOME=$HOME"; touch ~/cmd-was-here; pwd'`)
 	cmd.Dir = proj
 	cmd.Env = append(cmd.Env, "HOME="+ahome, "PWD="+proj)
@@ -609,7 +609,7 @@ func TestSetupAdoptAndPorts(t *testing.T) {
 	checkContents(filepath.Join(home, sfile), "original")
 
 	port := harness.FreePort(t)
-	cmd := e.Cmd("run", "--", "/bin/bash", "-c", fmt.Sprintf("python3 -m http.server %d --bind 127.0.0.1 >/dev/null 2>&1 & sleep 4", port))
+	cmd := e.Cmd("run", "--local-sandbox", "--", "/bin/bash", "-c", fmt.Sprintf("python3 -m http.server %d --bind 127.0.0.1 >/dev/null 2>&1 & sleep 4", port))
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}

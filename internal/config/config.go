@@ -46,6 +46,7 @@ func DataDir() string {
 }
 
 type SandboxCfg struct {
+	Enabled  *bool    `toml:"enabled"`
 	ExposeRO []string `toml:"expose_ro"`
 	PassEnv  []string `toml:"pass_env"` // extra env vars (glob patterns) passed to sandbox and agent
 }
@@ -139,6 +140,7 @@ type PortsMode struct {
 
 // Policy is the effective policy for one project.
 type Policy struct {
+	SandboxEnabled   bool
 	ExecMode         string
 	Project          string
 	Allow            []string // static allow list (defaults + config)
@@ -220,6 +222,9 @@ func (c *Config) PolicyFor(project string) (*Policy, error) {
 		}
 	}
 	applyContext(c.Context)
+	if c.Sandbox.Enabled != nil {
+		p.SandboxEnabled = *c.Sandbox.Enabled
+	}
 	p.ExecMode = c.Execution.Mode
 	if c.Observe.Enabled != nil {
 		p.ObserveEnabled = *c.Observe.Enabled
@@ -278,6 +283,9 @@ func (c *Config) PolicyFor(project string) (*Policy, error) {
 		}
 		p.ExposeRO = append(p.ExposeRO, pc.Sandbox.ExposeRO...)
 		p.PassEnv = append(p.PassEnv, pc.Sandbox.PassEnv...)
+		if pc.Sandbox.Enabled != nil {
+			p.SandboxEnabled = *pc.Sandbox.Enabled
+		}
 		applyContext(pc.Context)
 		if pc.Execution.Mode != "" {
 			p.ExecMode = pc.Execution.Mode

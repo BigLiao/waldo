@@ -7,9 +7,33 @@ import (
 	"testing"
 )
 
+func TestDefaultUnsandboxedHostMCP(t *testing.T) {
+	e, agent := setup(t)
+	e.WriteConfig("[agent.claude]\nbin=" + strconvQuote(agent) + "\nstate=[]\nshared=[]\n")
+	out, err := e.Cmd("claude", "cross-platform", "Linux").CombinedOutput()
+	if err != nil {
+		t.Fatalf("default Claude session: %v\n%s", err, out)
+	}
+	r := parseResults(string(out))
+	if r["cross_ok"] != "true" || r["cross_mcp_read"] != "true" || r["cross_mcp_write"] != "true" {
+		t.Fatalf("default session did not use the host MCP tools: %s", out)
+	}
+	for name, want := range map[string]string{"cross-host.txt": "forwarded", "cross-mcp.txt": "hello from A\n"} {
+		data, err := os.ReadFile(filepath.Join(e.Project, name))
+		if err != nil || string(data) != want {
+			t.Fatalf("%s did not reach the A workspace: %q %v", name, data, err)
+		}
+	}
+	log, err := os.ReadFile(filepath.Join(e.AData, "audit.log"))
+	if err != nil || !strings.Contains(string(log), `"local_sandbox":false`) {
+		t.Fatalf("expected unsandboxed session: %v\n%s", err, log)
+	}
+	waitNoMounts(t)
+}
+
 func TestRemoteBashAndHostMCPUseDifferentMachinesAndSameFiles(t *testing.T) {
 	e, agent := setup(t)
-	e.WriteConfig("[execution]\nmode='remote'\n[sandbox]\npass_env=['E2E_HOST_ONLY']\n[agent.claude]\nbin=" + strconvQuote(agent) + "\nstate=[]\nshared=[]\n")
+	e.WriteConfig("[execution]\nmode='remote'\n[sandbox]\nenabled=true\npass_env=['E2E_HOST_ONLY']\n[agent.claude]\nbin=" + strconvQuote(agent) + "\nstate=[]\nshared=[]\n")
 	cmd := e.Cmd("claude", "remote-bash") // mode is inherited, no launch flag
 	cmd.Env = append(cmd.Env, "E2E_HOST_ONLY=host-environment")
 	out, err := cmd.CombinedOutput()

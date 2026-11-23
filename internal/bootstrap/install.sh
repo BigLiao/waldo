@@ -9,16 +9,19 @@ os=$(uname -s)
 case "$role:$os" in
     a:Darwin) label='A（本机）'; shift; set -- ssh sandbox-exec "$@" ;;
     a:Linux) label='A（本机）'; shift; set -- ssh bwrap "$@" ;;
+    a-direct:Darwin|a-direct:Linux) label='A（本机）'; shift; set -- ssh "$@" ;;
     b:Linux) label='B（服务器）'; shift; set -- bwrap sshfs fusermount3 "$@" ;;
-    a:*|b:*) printf '%s\n' 'waldo: B 只支持 Linux；A 支持 Linux 和 macOS。' >&2; exit 1 ;;
-    *) printf '%s\n' '用法: install.sh a [额外命令...] | install.sh b' >&2; exit 2 ;;
+    a:*|a-direct:*|b:*) printf '%s\n' 'waldo: B 只支持 Linux；A 支持 Linux 和 macOS。' >&2; exit 1 ;;
+    *) printf '%s\n' '用法: install.sh a|a-direct [额外命令...] | install.sh b' >&2; exit 2 ;;
 esac
 
 if [ "$os" = Darwin ]; then
-    [ -x /usr/bin/sandbox-exec ] || { printf '%s\n' 'waldo: macOS 缺少系统 sandbox-exec，无法启动沙箱。' >&2; exit 1; }
     packages=''
     for dep do
-        [ "$dep" != sandbox-exec ] || continue
+        if [ "$dep" = sandbox-exec ]; then
+            [ -x /usr/bin/sandbox-exec ] || { printf '%s\n' 'waldo: macOS 缺少系统 sandbox-exec，无法启动沙箱。' >&2; exit 1; }
+            continue
+        fi
         if command -v "$dep" >/dev/null 2>&1; then continue; fi
         case "$dep" in
             rg) package=ripgrep ;;

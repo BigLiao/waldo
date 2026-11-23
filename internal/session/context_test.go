@@ -16,7 +16,7 @@ func TestContextGuideUsesEffectivePolicy(t *testing.T) {
 	t.Setenv("WALDO_CONFIG_DIR", d)
 	t.Setenv("ANTHROPIC_API_KEY", "must-not-appear-in-guide")
 	os.WriteFile(filepath.Join(d, "allowed.json"), []byte(`{"*":["global.example"],"/project":["local.example"]}`), 0600)
-	p := &config.Policy{Project: "/project", Allow: []string{"packages.example"}, HostPorts: []int{5432}, Ports: config.PortsMode{Mode: "list", List: []int{3000}}, ExposeRO: []string{"/toolchain"}}
+	p := &config.Policy{SandboxEnabled: true, Project: "/project", Allow: []string{"packages.example"}, HostPorts: []int{5432}, Ports: config.PortsMode{Mode: "list", List: []int{3000}}, ExposeRO: []string{"/toolchain"}}
 	got := string(contextGuide(p, "remote-host", "test-agent", "/project/sub", []string{"/project", "/tmp", proto.ContextDir}))
 	for _, want := range []string{"remote-host", "test-agent", "/project/sub", "packages.example", "global.example", "local.example", "5432", "3000", "/toolchain", proto.ContextFile} {
 		if !strings.Contains(got, want) {
@@ -41,7 +41,7 @@ func TestContextGuideRemoteModeExplainsBothShells(t *testing.T) {
 	t.Setenv("WALDO_CONFIG_DIR", t.TempDir())
 	p := &config.Policy{Project: "/project", ExecMode: proto.ExecRemote}
 	guide := string(contextGuide(p, "B", "test", "/project", []string{"/project"}))
-	for _, want := range []string{"内置 Bash", "mcp__waldo__Bash", "未命中的读取仍需访问 A", "修改真实工作区", "虚拟环境", "localhost 指 B", "现有本机沙箱"} {
+	for _, want := range []string{"内置 Bash", "mcp__waldo__Bash", "未命中的读取仍需访问 A", "修改真实工作区", "虚拟环境", "localhost 指 B", "Local sandbox disabled"} {
 		if !strings.Contains(guide, want) {
 			t.Fatalf("remote guide lacks %q", want)
 		}

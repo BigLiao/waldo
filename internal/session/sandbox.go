@@ -1,6 +1,5 @@
-// Package session is the A-side orchestration in the trusted waldo process:
-// it starts the sandbox and the SSH link and moves bytes between them, while
-// applying the terminal filter, network policy and audit log.
+// Package session orchestrates the local worker, the SSH link, the terminal
+// filter, and auditing. Isolated workers also use Waldo's network policy.
 package session
 
 import (
@@ -9,12 +8,14 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/hashicorp/yamux"
@@ -31,7 +32,7 @@ import (
 // ProxyPort is the outbound proxy port inside the sandbox network namespace.
 const ProxyPort = 39339
 
-// Sandbox is a running A-side sandbox.
+// Sandbox is the running A-side worker and its connection.
 type Sandbox struct {
 	Observe          bool
 	ModelTelemetry   string
@@ -50,6 +51,7 @@ type Sandbox struct {
 
 // SandboxOptions configures StartSandbox.
 type SandboxOptions struct {
+	Unsandboxed    bool
 	ReadOnlyMounts []sandbox.ReadOnlyMount
 	Home           string
 	Project        string
@@ -130,13 +132,12 @@ func newID() string {
 	return hex.EncodeToString(b)
 }
 
-// StartSandbox launches `waldo sandbox-serve` inside the sandbox and waits
-// for its facts.
+// StartSandbox launches the A-side worker and waits for its facts.
 func StartSandbox(o SandboxOptions) (*Sandbox, error) {
 	policy := netpolicy.New(o.Policy, o.Audit)
 	keepContext := false
 	var bridge *wsl.PortBridge
-	if len(o.Policy.WindowsPorts) > 0 {
+	if !o.Unsandboxed && len(o.Policy.WindowsPorts) > 0 {
 		if slices.Contains(o.Policy.WindowsPorts, ProxyPort) {
 			return nil, fmt.Errorf("net.windows_ports: TCP %d 由 Waldo 出网代理保留", ProxyPort)
 		}
@@ -156,18 +157,23 @@ func StartSandbox(o SandboxOptions) (*Sandbox, error) {
 	if err != nil {
 		return nil, err
 	}
-	sbHome := filepath.Join(o.DataDir, "sandbox-home")
-	if err := os.MkdirAll(sbHome, 0o700); err != nil {
-		return nil, err
-	}
-	expose := sandbox.DetectToolchains(o.Home)
-	expose = append(expose, o.Policy.ExposeRO...)
 	base := BaseEnv(o.Home, o.DataDir, o.Policy.PassEnv)
 	pathv, _ := util.EnvGet(base, "PATH")
 	spec := sandbox.Spec{
-		Home: o.Home, SandboxHome: sbHome, Project: o.Project, ExposeRO: expose, Exe: exe,
+		Home: o.Home, Project: o.Project, Exe: exe,
 		Env:            []string{"HOME=" + o.Home, "PATH=" + pathv},
-		ReadOnlyMounts: o.ReadOnlyMounts,
+		ReadOnlyMounts: slices.Clone(o.ReadOnlyMounts),
+	}
+	if o.Unsandboxed {
+		if err := os.MkdirAll(o.DataDir, 0o700); err != nil {
+			return nil, err
+		}
+	} else {
+		spec.SandboxHome = filepath.Join(o.DataDir, "sandbox-home")
+		if err := os.MkdirAll(spec.SandboxHome, 0o700); err != nil {
+			return nil, err
+		}
+		spec.ExposeRO = append(sandbox.DetectToolchains(o.Home), o.Policy.ExposeRO...)
 	}
 	cleanupContext := func() {}
 	defer func() {
@@ -187,7 +193,8 @@ func StartSandbox(o SandboxOptions) (*Sandbox, error) {
 		spec.ContextDir = dir
 	}
 	var native *nativeRuntime
-	if runtime.GOOS == "darwin" {
+	if o.Unsandboxed || runtime.GOOS == "darwin" {
+		o.Mkdirs = slices.Clone(o.Mkdirs)
 		native, err = prepareNative(&o, &spec, &base, policy)
 		if err != nil {
 			return nil, err
@@ -203,9 +210,19 @@ func StartSandbox(o SandboxOptions) (*Sandbox, error) {
 			return nil, err
 		}
 	}
-	cmd, err := sandbox.Default().Command(spec)
-	if err != nil {
-		return nil, err
+	var cmd *exec.Cmd
+	if o.Unsandboxed {
+		cmd = exec.Command(exe, "sandbox-serve")
+		cmd.Dir = o.Project
+		cmd.Env = spec.Env
+		// Let closing the control pipe trigger process-group cleanup when
+		// the CLI receives a terminal signal.
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	} else {
+		cmd, err = sandbox.Default().Command(spec)
+		if err != nil {
+			return nil, err
+		}
 	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -221,7 +238,7 @@ func StartSandbox(o SandboxOptions) (*Sandbox, error) {
 		defer lf.Close()
 	}
 	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("启动沙箱失败: %w", err)
+		return nil, fmt.Errorf("启动本机执行进程失败: %w", err)
 	}
 	waited := make(chan struct{})
 	go func() { cmd.Wait(); close(waited) }()
@@ -299,11 +316,11 @@ func StartSandbox(o SandboxOptions) (*Sandbox, error) {
 	case err := <-factsCh:
 		if err != nil {
 			sb.Close()
-			return nil, fmt.Errorf("沙箱启动失败（详见 %s）: %v", filepath.Join(o.DataDir, "log", "sandbox.log"), err)
+			return nil, fmt.Errorf("本机执行进程启动失败（详见 %s）: %v", filepath.Join(o.DataDir, "log", "sandbox.log"), err)
 		}
 	case <-time.After(20 * time.Second):
 		sb.Close()
-		return nil, fmt.Errorf("沙箱启动超时")
+		return nil, fmt.Errorf("本机执行进程启动超时")
 	}
 	go func() {
 		for {

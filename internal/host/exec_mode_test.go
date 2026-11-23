@@ -180,6 +180,7 @@ func TestRemoteCapsuleExecutesNativeBash(t *testing.T) {
 func TestHostMCPUsesNativeRuntimeAndForwardedGit(t *testing.T) {
 	h := &host{hello: remoteHello()}
 	h.hello.ExecMode = proto.ExecHostMCP
+	h.hello.Facts.Env = append(h.hello.Facts.Env, "TMPDIR=/A/runtime/tmp", "TMP=/A/runtime/tmp", "TEMP=/A/runtime/tmp")
 	h.hello.Argv = []string{"--disallowedTools=WebFetch", "-p", "hello"}
 	if err := h.configureExecMode(); err != nil {
 		t.Fatal(err)
@@ -195,8 +196,10 @@ func TestHostMCPUsesNativeRuntimeAndForwardedGit(t *testing.T) {
 	if !strings.HasPrefix(path, forwardPath("/A/bin")+":") || !strings.HasSuffix(path, util.NativePath) {
 		t.Fatal("wrong host-mcp PATH")
 	}
-	if _, ok := util.EnvGet(env, "NVM_BIN"); ok {
-		t.Fatal("A toolchain leaked into B runtime")
+	for _, key := range []string{"NVM_BIN", "TMPDIR", "TMP", "TEMP"} {
+		if _, ok := util.EnvGet(env, key); ok {
+			t.Fatalf("%s leaked from A into the B runtime", key)
+		}
 	}
 }
 

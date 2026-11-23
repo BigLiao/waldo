@@ -15,7 +15,7 @@ import (
 var installer string
 
 func arguments(role string, needs []string) ([]string, error) {
-	if role != "a" && role != "b" {
+	if role != "a" && role != "a-direct" && role != "b" {
 		return nil, fmt.Errorf("bootstrap: unknown role %q", role)
 	}
 	args := []string{"-c", installer, "waldo-install", role}

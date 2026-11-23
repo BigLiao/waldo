@@ -77,7 +77,7 @@ var commandHelp = map[string]string{
   waldo setup --remote b2
 `,
 	"doctor": `用法: waldo doctor [--remote <名称>]
-省略名称检查默认远端；检查两端依赖、沙箱、Agent 安装及状态目录。
+省略名称检查默认远端；按当前项目的设置检查本机沙箱，并检查两端依赖、Agent 安装及状态目录。
 doctor 沿用原行为，可能安装或更新 B 的 Waldo；只读连接检查请用 waldo remote status。
 `,
 	"sessions": `用法: waldo sessions [--remote <名称>] [--json]
@@ -93,8 +93,9 @@ SSH 状态: starting、connected、reconnecting；旧客户端未记录时为 un
 读取本机审计日志。-n 默认 50 条；-f 持续跟踪；-s 与 --remote 可组合筛选。
 已删除配置的远端仍可筛选历史日志；旧版未标记远端的日志无法按名称筛选。
 `,
-	"run": `用法: waldo run [--remote <名称>] [--observe[=true|false]] [--exec-mode host|remote|host-mcp] -- <命令> [参数...]
+	"run": `用法: waldo run [--remote <名称>] [--local-sandbox[=true|false]] [--observe[=true|false]] [--exec-mode host|remote|host-mcp] -- <命令> [参数...]
 用空 profile 运行任意 CLI Agent。默认模式为 host（空 profile 不支持 MCP）；remote/host-mcp 需 profile 支持 MCP。
+本机沙箱默认关闭；--local-sandbox 为本次会话启用。
 -- 后的参数原样传给命令，不再解析 Waldo 参数。
 `,
 	"allow": `用法: waldo allow [--global] <域名>...
@@ -124,9 +125,10 @@ func showHelp(topic []string, out io.Writer) int {
 		return 0
 	}
 	if _, ok := cfg.Profiles()[key]; ok {
-		fmt.Fprintf(out, `用法: waldo %s [--remote <名称>] [--paseo] [--observe[=true|false]] [--exec-mode host|remote|host-mcp] [Agent 参数...]
+		fmt.Fprintf(out, `用法: waldo %s [--remote <名称>] [--local-sandbox[=true|false]] [--paseo] [--observe[=true|false]] [--exec-mode host|remote|host-mcp] [Agent 参数...]
 Waldo 参数放在 Agent 参数之前；--paseo 由 Paseo 启动时使用。
-host-mcp（支持 MCP 的 Agent 默认）: 同名 MCP 工具按路径分发；host: 命令在本机沙箱（其余 Agent 默认）；remote: 内置 Bash 在远端。
+本机沙箱默认关闭；--local-sandbox 为本次会话启用。
+host-mcp（支持 MCP 的 Agent 默认）: 同名 MCP 工具按路径分发；host: 命令在本机（其余 Agent 默认）；remote: 内置 Bash 在远端。
 选择顺序: --remote、default_remote、原有 host；未设置 host 时，唯一命名远端自动选中。
 Agent 自身的帮助: waldo %s --help（将连接远端）。
 `, key, key)

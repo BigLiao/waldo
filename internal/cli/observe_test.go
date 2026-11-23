@@ -48,3 +48,19 @@ func TestObserveExplicitOverrideAndInheritance(t *testing.T) {
 		}
 	}
 }
+
+func TestLocalSandboxWrapperOverride(t *testing.T) {
+	_, parent, err := wrapperPrefix([]string{"--local-sandbox", "claude"})
+	if err != nil || parent.LocalSandbox == nil || !*parent.LocalSandbox {
+		t.Fatalf("could not enable local sandbox: %v", err)
+	}
+	args := []string{"-p", "--local-sandbox"}
+	out, child, err := wrapperPrefix(append([]string{"--local-sandbox=false"}, args...))
+	child.inherit(parent)
+	if err != nil || !reflect.DeepEqual(out, args) || child.LocalSandbox == nil || *child.LocalSandbox {
+		t.Fatalf("could not override local sandbox: args=%v err=%v", out, err)
+	}
+	if _, _, err := wrapperPrefix([]string{"--local-sandbox=other"}); err == nil {
+		t.Fatal("accepted an invalid mode")
+	}
+}

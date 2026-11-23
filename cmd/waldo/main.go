@@ -2,7 +2,7 @@
 // the first argument:
 //
 //	waldo ...              A: the trusted client and its user commands
-//	waldo sandbox-serve    A: inside the sandbox, serves files and exec
+//	waldo sandbox-serve    A: serves file and exec requests
 //	waldo host             B: per-session capsule and stub hub
 //	<anything else>        B: inside the capsule, a stub that forwards to A
 package main

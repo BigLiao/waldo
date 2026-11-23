@@ -6,7 +6,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -50,13 +49,12 @@ func fail(st io.WriteCloser, fw *proto.FrameWriter, code int, format string, a .
 // A stream that closes before the process exits means the stub on B died or
 // the connection dropped: the whole process group is killed. After a normal
 // exit, background processes keep running (until the session ends).
-func runExec(st io.ReadWriteCloser, req *proto.ExecReq, execEnv []string) {
-	if runtime.GOOS == "darwin" && req.Path == "/run/waldo/waldo" {
-		if len(req.Argv) < 2 || req.Argv[1] != "host-file-tool" {
-			return
-		}
+func runExec(st io.ReadWriteCloser, req *proto.ExecReq, execEnv []string, native bool) {
+	fw := proto.NewFrameWriter(st)
+	if native && req.Path == "/run/waldo/waldo" && len(req.Argv) >= 2 && req.Argv[1] == "host-file-tool" {
 		exe, err := os.Executable()
 		if err != nil {
+			fail(st, fw, 126, "无法定位本机 Waldo: %v", err)
 			return
 		}
 		copyReq := *req
@@ -64,17 +62,16 @@ func runExec(st io.ReadWriteCloser, req *proto.ExecReq, execEnv []string) {
 		req.Path = exe
 		req.Argv = append([]string{exe}, req.Argv[1:]...)
 	}
-	fw := proto.NewFrameWriter(st)
 	if len(req.Argv) == 0 || req.Path == "" || !strings.HasPrefix(req.Path, "/") {
 		fail(st, fw, 126, "invalid exec request")
 		return
 	}
 	if fi, err := os.Stat(req.Path); err != nil || fi.IsDir() {
-		fail(st, fw, 127, "%s: 在 A 的沙箱中不存在（命令执行转发到 A）", req.Path)
+		fail(st, fw, 127, "%s: 在 A 的执行环境中不存在", req.Path)
 		return
 	}
 	if !util.IsDir(req.Cwd) {
-		fail(st, fw, 126, "工作目录 %s 在 A 的沙箱中不存在", req.Cwd)
+		fail(st, fw, 126, "工作目录 %s 在 A 的执行环境中不存在", req.Cwd)
 		return
 	}
 	env := append([]string(nil), req.Env...)
@@ -125,7 +122,7 @@ func runExec(st io.ReadWriteCloser, req *proto.ExecReq, execEnv []string) {
 		outs = []io.Reader{outR, errR}
 	}
 	pgid := cmd.Process.Pid
-	if runtime.GOOS == "darwin" {
+	if native {
 		nativeJobs.add(pgid)
 		defer nativeJobs.prune()
 	}

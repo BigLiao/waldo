@@ -7,8 +7,8 @@ import (
 )
 
 // A process group remains registered after its leader exits if background jobs
-// still use it. Detached descendants have the native lifecycle limits described
-// in SECURITY.md; they do not escape the inherited Seatbelt policy.
+// still use it. A descendant that creates its own process group can outlive
+// the worker. If Seatbelt is enabled, those descendants retain its policy.
 type processGroups struct {
 	mu      sync.Mutex
 	groups  map[int]bool

@@ -53,7 +53,7 @@ func TestLocalFileRoutingVersionsAndNoFallback(t *testing.T) {
 	must("Read", map[string]any{"file_path": file})
 	must("Write", map[string]any{"file_path": file, "content": ""})
 	res, e = call("Read", map[string]any{"file_path": file, "location": "host"})
-	if e == nil || !strings.Contains(e.Error(), "A sandbox unavailable") {
+	if e == nil || !strings.Contains(e.Error(), "A command channel unavailable") {
 		t.Fatal("host read fell back", res, e)
 	}
 	res, e = call("Read", map[string]any{"file_path": file + "missing"})

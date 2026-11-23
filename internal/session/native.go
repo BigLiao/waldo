@@ -42,29 +42,32 @@ func prepareNative(o *SandboxOptions, spec *sandbox.Spec, base *[]string, policy
 			n.Close()
 		}
 	}()
-	n.root, err = filepath.EvalSymlinks(n.root)
+	root, err := filepath.EvalSymlinks(n.root)
 	if err != nil {
 		return nil, err
 	}
+	n.root = root
 	n.tmp = filepath.Join(n.root, "tmp")
 	if err = os.MkdirAll(n.tmp, 0700); err != nil {
-		return nil, err
-	}
-	spec.SandboxHome, err = filepath.EvalSymlinks(spec.SandboxHome)
-	if err != nil {
 		return nil, err
 	}
 	n.paths["/tmp"] = n.tmp
 	if spec.ContextDir != "" {
 		n.paths[proto.ContextDir] = spec.ContextDir
 	}
-	for i, p := range o.Mkdirs {
-		rel, e := filepath.Rel(o.Home, p)
-		if e != nil || rel == ".." || strings.HasPrefix(rel, "../") {
-			return nil, fmt.Errorf("invalid shared HOME path %q", p)
+	if !o.Unsandboxed {
+		spec.SandboxHome, err = filepath.EvalSymlinks(spec.SandboxHome)
+		if err != nil {
+			return nil, err
 		}
-		dest := filepath.Join(spec.SandboxHome, rel)
-		n.paths[p], o.Mkdirs[i] = dest, dest
+		for i, p := range o.Mkdirs {
+			rel, e := filepath.Rel(o.Home, p)
+			if e != nil || rel == ".." || strings.HasPrefix(rel, "../") {
+				return nil, fmt.Errorf("invalid shared HOME path %q", p)
+			}
+			dest := filepath.Join(spec.SandboxHome, rel)
+			n.paths[p], o.Mkdirs[i] = dest, dest
+		}
 	}
 	for i, m := range spec.ReadOnlyMounts {
 		dest := filepath.Join(n.root, "skills", fmt.Sprint(i))
@@ -75,39 +78,46 @@ func prepareNative(o *SandboxOptions, spec *sandbox.Spec, base *[]string, policy
 		if e != nil || rel == ".." || strings.HasPrefix(rel, "../") {
 			return nil, fmt.Errorf("invalid skill target %q", m.Target)
 		}
-		target := filepath.Join(spec.SandboxHome, rel)
+		target := m.Target
+		if !o.Unsandboxed {
+			target = filepath.Join(spec.SandboxHome, rel)
+		}
 		n.paths[m.Target] = target
 		n.sources[target] = dest
 		spec.ReadOnlyMounts[i] = sandbox.ReadOnlyMount{Source: dest, Target: dest}
 	}
-	n.proxy, err = netpolicy.StartHTTPProxy(policy)
-	if err != nil {
-		return nil, err
+	if !o.Unsandboxed {
+		n.proxy, err = netpolicy.StartHTTPProxy(policy)
+		if err != nil {
+			return nil, err
+		}
+		spec.TempDir, spec.ProxyPort, spec.HostPorts = n.tmp, n.proxy.Port, o.Policy.HostPorts
+		switch o.Policy.Ports.Mode {
+		case "list":
+			spec.ListenPorts = append([]int(nil), o.Policy.Ports.List...)
+		case "off":
+		default:
+			fmt.Fprintln(os.Stderr, "waldo: macOS 自动端口发布不可用；开发服务请配置 [net] ports = [3000, 5173]")
+		}
+		*base = util.EnvSet(*base, "HOME", spec.SandboxHome)
+		// Proxy credentials stay on A.
+		n.env = proxyEnvURL(n.proxy.URL)
+		for _, key := range []string{"CLANG_MODULE_CACHE_PATH", "SWIFT_MODULECACHE_PATH"} {
+			*base = util.EnvSet(*base, key, filepath.Join(spec.SandboxHome, ".cache", key))
+		}
 	}
-	spec.TempDir, spec.ProxyPort, spec.HostPorts = n.tmp, n.proxy.Port, o.Policy.HostPorts
-	switch o.Policy.Ports.Mode {
-	case "list":
-		spec.ListenPorts = append([]int(nil), o.Policy.Ports.List...)
-	case "off":
-	default:
-		fmt.Fprintln(os.Stderr, "waldo: macOS 自动端口发布不可用；开发服务请配置 [net] ports = [3000, 5173]")
-	}
-	*base = util.EnvSet(*base, "HOME", spec.SandboxHome)
 	for _, key := range []string{"TMPDIR", "TMP", "TEMP"} {
 		*base = util.EnvSet(*base, key, n.tmp)
+		n.env = append(n.env, key+"="+n.tmp)
 	}
-	// Secrets are forced only on A exec, never included in Facts sent to B.
-	n.env = proxyEnvURL(n.proxy.URL)
+	home, _ := util.EnvGet(*base, "HOME")
+	n.env = append(n.env, "HOME="+home)
 	if len(n.sources) > 0 {
 		mappings, _ := json.Marshal(n.sources)
 		if len(mappings) > 65536 {
 			return nil, fmt.Errorf("too many native skill aliases")
 		}
 		n.env = append(n.env, "WALDO_FILE_ALIASES="+string(mappings))
-	}
-	n.env = append(n.env, "HOME="+spec.SandboxHome, "TMPDIR="+n.tmp, "TMP="+n.tmp, "TEMP="+n.tmp)
-	for _, key := range []string{"CLANG_MODULE_CACHE_PATH", "SWIFT_MODULECACHE_PATH"} {
-		*base = util.EnvSet(*base, key, filepath.Join(spec.SandboxHome, ".cache", key))
 	}
 	spec.Env = append([]string(nil), (*base)...)
 	if spec.ContextDir != "" {
@@ -119,7 +129,11 @@ func prepareNative(o *SandboxOptions, spec *sandbox.Spec, base *[]string, policy
 		for target, source := range n.sources {
 			guide += fmt.Sprintf("\nRead-only skill: B path %q; A helper commands use %q. File tools translate this alias automatically.\n", target, source)
 		}
-		guide += "\nmacOS native sandbox: HOME and TMPDIR are real private paths. B /tmp is separate; use the advertised shared tmp path. DNS is resolved by the authenticated proxy. Development listeners require explicit configured ports. Detached daemons may outlive session cleanup while retaining sandbox restrictions.\n"
+		if o.Unsandboxed {
+			guide += "\nA uses its real HOME and a session-specific TMPDIR. B /tmp is separate; use the projected temporary path when sharing files. Detached daemons may outlive session cleanup.\n"
+		} else {
+			guide += "\nmacOS native sandbox: HOME and TMPDIR are real private paths. B /tmp is separate; use the advertised shared tmp path. DNS is resolved by the authenticated proxy. Development listeners require explicit configured ports. Detached daemons may outlive session cleanup while retaining sandbox restrictions.\n"
+		}
 		err = os.WriteFile(filepath.Join(spec.ContextDir, "waldo.md"), []byte(guide), 0444)
 		if err != nil {
 			return nil, err
