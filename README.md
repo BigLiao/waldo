@@ -26,22 +26,24 @@ waldo 把 Claude Code（以及 Codex 等编程 Agent）留在你自己的 Linux 
 
 ### 第 1 步：在本机安装 waldo
 
-运行一键安装脚本（仅需 `curl` 与 `sha256sum` 或 Mac 自带的 `shasum`，不需要 Go 或 `sudo`）：
+**只需在你正在使用的本机电脑上安装**（无需登录远端服务器手动安装，下一步 `waldo setup` 会自动部署到服务器）。
+
+在本机终端运行一键安装脚本（仅需 `curl` 与 `sha256sum` 或 Mac 自带的 `shasum`，不需要 Go 或 `sudo`）：
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/BigLiao/waldo/master/install.sh | sh
 ```
 
-脚本会自动识别本机系统与架构（Linux / macOS 的 `amd64` / `arm64`），下载最新稳定版及配套的 Linux 服务端程序，校验 SHA256 后原子安装到 `~/.local/bin`（不会改动已有配置或 shell 启动文件）。
+脚本会自动识别本机系统与架构（Linux / macOS 的 `amd64` / `arm64`），下载本机程序以及配套的 Linux 服务端程序，校验 SHA256 后原子安装到本机 `~/.local/bin`（不会改动已有配置或 shell 启动文件）。
 
-> **提示**：如果 `~/.local/bin` 还不在 `PATH` 中，按脚本输出把它加进 `~/.bashrc` 或 `~/.zshrc`：
+> **提示**：如果 `~/.local/bin` 还不在本机 `PATH` 中，按脚本输出把它加进 `~/.bashrc` 或 `~/.zshrc`：
 >
 > ```sh
 > export PATH="$HOME/.local/bin:$PATH"
 > ```
 >
-> - **macOS 用户**：需要 v0.4.1 及以上的 Release，详见 [macOS 使用说明](docs/macos.md)。
-> - **Windows 用户**：请在 WSL2 发行版的终端里执行安装和后续命令，详见 [Windows 与 WSL2 使用说明](docs/configuration.md#windows-与-wsl2)。
+> - **macOS 本机**：需要 v0.4.1 及以上的 Release，详见 [macOS 使用说明](docs/macos.md)。
+> - **Windows 本机**：请在 WSL2 发行版的终端里安装和运行，详见 [Windows 与 WSL2 使用说明](docs/configuration.md#windows-与-wsl2)。
 
 <details>
 <summary>其他安装方式：指定版本/目录、手动下载 Release、从源码构建</summary>
@@ -85,7 +87,9 @@ install -m 755 waldo waldo-linux-amd64 waldo-linux-arm64 ~/.local/bin/
 
 </details>
 
-### 第 2 步：初始化服务器连接（只需一次）
+### 第 2 步：在本机初始化服务器连接（只需一次）
+
+继续在本机终端执行：
 
 ```sh
 waldo setup me@my-server
